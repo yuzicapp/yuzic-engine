@@ -11,6 +11,33 @@ behaviour does not.
 
 ## [Unreleased]
 
+## [1.0.8]
+
+### Fixed
+
+- On Android, **`setup()` resolved before the engine existed**, so the first
+  commands the host sent went nowhere. `configureAudioSession` starts the
+  service by binding a `MediaController`, and `buildAsync` returns at once —
+  the service is created later, in `PlaybackService.onCreate`, which is where
+  the `AudioGraph` comes from. Nothing waited for that.
+
+  The host reads `setup` resolving as "ready" and releases every command
+  queued behind it. Those reached `PlaybackService.graph?.` and were
+  optional-chained into silence, and `startObserving` had returned early for
+  the same reason, so no state or progress events flowed either. The result
+  is a player that looks entirely healthy and does nothing — which is why
+  restarting appears to fix it.
+
+  `setup` now waits for the controller, bounded, on Expo's module queue rather
+  than the main thread. With readiness meaning what it claims, the swallow
+  below it becomes a throw: `onPlayer`, `setRepeatMode`, `setSpeed` and
+  `clearQueue` raise `EngineNotSetUpException` — the same error iOS raises
+  from `requireEngine`, worded identically — instead of doing nothing. Getters
+  keep their fallbacks, which is the split iOS makes too.
+
+  Verified on an emulator: a cold launch of a standalone build binds
+  `PlaybackService`, runs JS, and raises no exception and no ANR.
+
 ## [1.0.7]
 
 ### Added
