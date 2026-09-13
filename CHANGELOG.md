@@ -11,6 +11,8 @@ behaviour does not.
 
 ## [Unreleased]
 
+## [1.0.7]
+
 ### Added
 
 - **Cover art on the car's browse rows**, on iOS. `BrowseNode.artworkUri` had
