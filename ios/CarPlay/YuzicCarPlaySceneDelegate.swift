@@ -21,6 +21,16 @@ public final class YuzicCarPlaySceneDelegate: UIResponder, CPTemplateApplication
 
   private var interfaceController: CPInterfaceController?
 
+  /**
+   Kept for the life of the scene, not per template.
+
+   CarPlay rebuilds a template on every push and on every root change, so a
+   loader owned by `listTemplate` would start empty each time and re-fetch the
+   same fifty covers on every navigation, over a phone connection, while
+   someone is driving.
+   */
+  private let artwork = BrowseArtworkLoader()
+
   public func templateApplicationScene(
     _ scene: CPTemplateApplicationScene,
     didConnect interfaceController: CPInterfaceController
@@ -34,6 +44,8 @@ public final class YuzicCarPlaySceneDelegate: UIResponder, CPTemplateApplication
     // the kind of fiddling nobody should do while moving.
     CarPlayCoordinator.shared.setRootChangeHandler { [weak self] in
       guard let self, let controller = self.interfaceController else { return }
+      // A new tree may not contain the tracks the old covers belonged to.
+      self.artwork.clear()
       controller.setRootTemplate(self.rootTemplate(), animated: false, completion: nil)
     }
   }
@@ -67,9 +79,30 @@ public final class YuzicCarPlaySceneDelegate: UIResponder, CPTemplateApplication
       item.handler = { [weak self] _, completion in
         self?.handle(child, completion: completion)
       }
+      loadArtwork(child, into: item)
       return item
     }
     return CPListTemplate(title: node.title, sections: [CPListSection(items: items)])
+  }
+
+  /**
+   Put a row's cover on it once it arrives.
+
+   Asynchronous and unordered on purpose: the list is shown immediately with
+   whatever art is already cached, and the rest fills in. Making the template
+   wait would hold the screen blank on a slow connection, which is the worse
+   trade for someone who has just plugged in and wants to pick something.
+
+   The item is held weakly. A driver can push and pop templates faster than a
+   request completes, and a strong reference here would keep whole screens of
+   rows alive for as long as a stalled server took to answer.
+   */
+  private func loadArtwork(_ node: BrowseNode, into item: CPListItem) {
+    guard node.artworkUri?.isEmpty == false else { return }
+    artwork.image(for: node) { [weak item] data in
+      guard let data, let image = UIImage(data: data) else { return }
+      DispatchQueue.main.async { item?.setImage(image) }
+    }
   }
 
   private func handle(_ node: BrowseNode, completion: @escaping () -> Void) {

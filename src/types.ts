@@ -214,6 +214,19 @@ export interface BrowseNode {
   title: string;
   subtitle?: string;
   artworkUri?: string;
+  /**
+   * Sent only while fetching `artworkUri`, exactly as `Track.artworkHeaders`
+   * is for the now-playing cover.
+   *
+   * Without it a header-authenticated server — a Plex behind a Basic-auth
+   * proxy, a Navidrome reached through one — answers 401 for every browse
+   * thumbnail, and the car shows a list of blank squares while the same album
+   * displays its cover perfectly on the now-playing screen. Keep credentials
+   * out of the URL: a browse tree is held in memory for the life of the
+   * process and pushed to the car, so a signed URL in it outlives the session
+   * that signed it.
+   */
+  artworkHeaders?: Record<string, string>;
   /** Present for a branch; absent or empty for a leaf that plays. */
   children?: BrowseNode[];
   /** For a leaf: what to play. */

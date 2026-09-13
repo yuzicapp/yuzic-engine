@@ -506,6 +506,8 @@ struct BrowseNodeRecord: Record {
   @Field var title: String = ""
   @Field var subtitle: String?
   @Field var artworkUri: String?
+  /// Sent only while fetching `artworkUri` — see `BrowseNode.artworkHeaders`.
+  @Field var artworkHeaders: [String: String] = [:]
   @Field var playable: TrackRecord?
 }
 
@@ -611,6 +613,7 @@ extension BrowseNodeRecord {
       title: title,
       subtitle: subtitle,
       artworkUri: artworkUri,
+      artworkHeaders: artworkHeaders,
       playable: playable?.asTrack
     )
   }

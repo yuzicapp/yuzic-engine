@@ -11,6 +11,40 @@ behaviour does not.
 
 ## [Unreleased]
 
+### Added
+
+- **Cover art on the car's browse rows**, on iOS. `BrowseNode.artworkUri` had
+  been carried across the bridge since the browse tree existed and was read by
+  nothing: the CarPlay scene delegate built every row with a title, a subtitle
+  and an accessory, and never an image. A library that shows covers everywhere
+  else showed a column of blank squares in the car.
+
+  `BrowseNode` gains `artworkHeaders`, alongside the `artworkUri` it already
+  had, so a header-authenticated server — a Plex behind a Basic-auth proxy —
+  answers with a cover rather than a 401. Headers rather than a signed URL
+  because a browse tree is held for the life of the process and pushed to the
+  car in advance; a credential baked into a URL outlives the session that
+  issued it.
+
+  `BrowseArtworkLoader` keeps what it has fetched and collapses concurrent asks
+  for the same image into one request. CarPlay rebuilds a template on every
+  push and every root change, so a list of fifty albums would otherwise be
+  fifty requests per navigation, over a phone connection, while someone is
+  driving.
+
+  **Android carries the field but cannot use it.** A browse row's cover there
+  goes through Media3, which takes a URI on `MediaMetadata` and fetches it
+  itself with no hook for a request header, so thumbnails render for an
+  ordinary server and not for a header-authenticated one. Declared in
+  `Tools/parity.py` rather than left to be discovered.
+
+### Changed
+
+- `Tools/parity.py` compares record *fields* against a declared gap list as
+  well as whole methods. The browse-artwork header is a difference in one field
+  of one record on a method both platforms implement, which the method-level
+  check could only report as an undifferentiated signature mismatch.
+
 ## [1.0.6]
 
 Two ways a track could stop playing with nothing reported anywhere. Both are

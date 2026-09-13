@@ -41,6 +41,27 @@ KNOWN_GAPS = {
     "configureCache": "android",
 }
 
+# Record fields one platform carries and the other cannot, keyed by the field
+# name. Same rule as KNOWN_GAPS: listing one is a claim that the difference is
+# understood and written down, not a way to quieten the check.
+#
+# A field-level gap rather than a whole method, because the method itself works
+# on both platforms — it is one argument of one record that has nowhere to go.
+KNOWN_FIELD_GAPS = {
+    # Browse rows on Android get their cover through Media3, which takes a URI
+    # on `MediaMetadata` and fetches it itself — there is no hook to attach a
+    # header to that request. Carrying the field anyway would put a value on the
+    # bridge that nothing on the far side can read, which is the shape this
+    # project keeps having to remove.
+    #
+    # The consequence is real and bounded: browse thumbnails on Android render
+    # for an ordinary server and not for a header-authenticated one. Fixing it
+    # means fetching each cover with the OkHttp factory that already carries
+    # `TrackHeaders` and handing Media3 the bytes via `setArtworkData` — device
+    # work, tracked separately.
+    "artworkHeaders": "android",
+}
+
 # Events one platform declares and deliberately never sends. Same rule as
 # KNOWN_GAPS: listing one is a claim that the difference is understood, not a
 # way to quieten the check.
@@ -134,6 +155,37 @@ def parse_records(text: str) -> dict[str, tuple[tuple[str, str], ...]]:
             sorted((f, canonical(t)) for f, t in FIELD.findall(body))
         )
     return records
+
+
+def without_known_field_gaps(types: list[str]) -> list[str]:
+    """Drop the fields declared in KNOWN_FIELD_GAPS before comparing.
+
+    Removed from *both* sides rather than added to the one that lacks it: the
+    comparison then says "these agree apart from a difference that is written
+    down", and a second, undeclared field difference in the same record still
+    fails. Adding it to the poorer side instead would have hidden that.
+
+    The separator has to go with the field or the shapes stop parsing as
+    shapes — a record rendered `{a:X,b:Y}` with `a` removed is `{b:Y}`, not
+    `{,b:Y}`, and a comparison against a literal string notices the difference.
+    """
+    if not KNOWN_FIELD_GAPS:
+        return types
+    names = "|".join(re.escape(f) for f in KNOWN_FIELD_GAPS)
+    # Field with the comma after it, then field with the comma before it (the
+    # last in a record has no comma after), then a record of nothing else.
+    patterns = [
+        re.compile(rf"\b(?:{names}):[^,}}]+,"),
+        re.compile(rf",\b(?:{names}):[^,}}]+"),
+        re.compile(rf"\{{(?:{names}):[^,}}]+\}}"),
+    ]
+    out = []
+    for t in types:
+        t = patterns[0].sub("", t)
+        t = patterns[1].sub("", t)
+        t = patterns[2].sub("{}", t)
+        out.append(t)
+    return out
 
 
 def resolve(types: list[str], records: dict) -> list[str]:
@@ -256,7 +308,8 @@ def main() -> int:
         n for n in set(android) - set(ios) if KNOWN_GAPS.get(n) != "ios"
     )
     mismatched = sorted(
-        n for n in set(ios) & set(android) if ios[n] != android[n]
+        n for n in set(ios) & set(android)
+        if without_known_field_gaps(ios[n]) != without_known_field_gaps(android[n])
     )
     android_all = android_text + "\n".join(
         path.read_text() for path in ANDROID_EXTRA if path.exists()
@@ -310,6 +363,11 @@ def main() -> int:
         print("Known gaps (declared in KNOWN_GAPS):")
         for n in known:
             print(f"  {n} — absent on {KNOWN_GAPS[n]}")
+        print()
+    if KNOWN_FIELD_GAPS:
+        print("Known field gaps (declared in KNOWN_FIELD_GAPS):")
+        for field, side in sorted(KNOWN_FIELD_GAPS.items()):
+            print(f"  {field} — carried on the bridge, unusable on {side}")
         print()
     if stale:
         print("KNOWN_GAPS lists differences that no longer exist — remove them:")

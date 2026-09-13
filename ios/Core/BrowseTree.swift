@@ -16,6 +16,18 @@ public struct BrowseNode: Equatable {
   public let title: String
   public let subtitle: String?
   public let artworkUri: String?
+  /**
+   Sent only while fetching `artworkUri`, exactly as `Track.artworkHeaders` is
+   for the now-playing cover.
+
+   Without it a header-authenticated server answers 401 for every browse
+   thumbnail, and the car shows a list of blank squares while the same album's
+   cover appears perfectly on the now-playing screen. Headers rather than a
+   signed URL because a browse tree is held for the life of the process and
+   pushed to the car in advance — a credential baked into the URL outlives the
+   session that issued it.
+   */
+  public let artworkHeaders: [String: String]
   public let children: [BrowseNode]
   /// Present on a leaf: what to play when it is chosen.
   public let playable: Track?
@@ -25,6 +37,7 @@ public struct BrowseNode: Equatable {
     title: String,
     subtitle: String? = nil,
     artworkUri: String? = nil,
+    artworkHeaders: [String: String] = [:],
     children: [BrowseNode] = [],
     playable: Track? = nil
   ) {
@@ -32,6 +45,7 @@ public struct BrowseNode: Equatable {
     self.title = title
     self.subtitle = subtitle
     self.artworkUri = artworkUri
+    self.artworkHeaders = artworkHeaders
     self.children = children
     self.playable = playable
   }
@@ -95,17 +109,21 @@ public enum BrowseTree {
     public let title: String
     public let subtitle: String?
     public let artworkUri: String?
+    /// Sent only while fetching `artworkUri` — see `BrowseNode.artworkHeaders`.
+    public let artworkHeaders: [String: String]
     public let playable: Track?
 
     public init(
       id: String, parentId: String? = nil, title: String,
-      subtitle: String? = nil, artworkUri: String? = nil, playable: Track? = nil
+      subtitle: String? = nil, artworkUri: String? = nil,
+      artworkHeaders: [String: String] = [:], playable: Track? = nil
     ) {
       self.id = id
       self.parentId = parentId
       self.title = title
       self.subtitle = subtitle
       self.artworkUri = artworkUri
+      self.artworkHeaders = artworkHeaders
       self.playable = playable
     }
   }
@@ -147,6 +165,7 @@ public enum BrowseTree {
         title: node.title,
         subtitle: node.subtitle,
         artworkUri: node.artworkUri,
+        artworkHeaders: node.artworkHeaders,
         children: children,
         playable: node.playable
       )
