@@ -461,8 +461,26 @@ public final class PlaybackEngine {
       else { return }
       self.pause()
     })
+
+    // `mediaserverd` restarted. Everything audio in this process is now
+    // invalid — see `recoverFromMediaServicesReset`.
+    observers.append(centre.addObserver(
+      forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      self?.recoverFromMediaServicesReset()
+    })
     #endif
   }
+
+  /**
+   Re-apply the audio session's category and activation.
+
+   Set by the host, because the category is the host's choice — `.playback`,
+   `.longFormAudio` — and this class has no business deciding it. It exists as
+   a closure rather than a call because a media services reset clears the
+   session the host configured once at setup, and nothing was putting it back.
+   */
+  public var reconfigureAudioSession: (() throws -> Void)?
 
   /**
    Whether an interruption ending should resume playback.
@@ -516,6 +534,85 @@ public final class PlaybackEngine {
    path: a fresh `TrackPlayback` over the same reader, seeking to where the
    listener actually was.
    */
+  /**
+   Come back from the media server restarting.
+
+   `mediaserverd` is a separate process and it can die — under memory pressure,
+   on a Bluetooth handover, in a car. When it comes back, Apple's contract is
+   that every audio object this process holds is invalid: the engine, the
+   nodes, the units, *and* the session category the host set once at setup.
+
+   Nothing observed this, so nothing put any of it back. The engine kept its
+   state, its queue and its now-playing info, and the graph underneath was
+   rubble — a track sitting there showing paused, with transport controls that
+   did nothing, until the app was force-quit. That is the "sometimes it just
+   breaks and the song won't play" report, and it is not a race or a rare
+   ordering: it is the whole of the handling for one of the four ways iOS takes
+   audio away, missing.
+
+   Unlike a configuration change, the reader is kept. A media services reset
+   invalidates *audio* objects; an `AudioFileReader` over an HTTP source is not
+   one, and throwing away a warm stream to re-open it from the network would
+   turn a recoverable glitch into a stall.
+
+   Left paused deliberately, whatever it was doing before. The other recovery
+   paths resume because the listener never stopped listening — a route change
+   is the same second of the same song. A media server reset is a crash the
+   audio system just had, and starting music unbidden out of whatever output
+   iOS has settled on afterwards is not a thing to do on the strength of a
+   guess about which one that is.
+   */
+  private func recoverFromMediaServicesReset() {
+    // Read the position and let go of the old playback *first*. Its player
+    // node belongs to the graph that is about to be replaced, and once it has
+    // been, asking that node where it is traps — `lastRenderTime` asserts on a
+    // node with no engine, which is a crash rather than a nil. The same
+    // ordering `rebuildAfterConfigurationChange` keeps, for the same reason.
+    let frame = activePlayback?.currentFrame ?? 0
+    activePlayback?.stopAndWait()
+    activePlayback = nil
+
+    do {
+      // Session first: the graph cannot start into a session that has no
+      // category, and after a reset it has none.
+      try reconfigureAudioSession?()
+      try graph.rebuildAfterReset()
+    } catch {
+      state = .paused
+      publishNowPlaying()
+      emit(.failed("audio could not be restarted after a media services reset: \(error)"))
+      return
+    }
+
+    guard let reader = activeReader, reader.sampleRate > 0 else {
+      state = .paused
+      publishNowPlaying()
+      return
+    }
+
+    do {
+      graph.reconnect(graph.activeVoice, toSourceRate: reader.sampleRate)
+      graph.setTrackGain(graph.activeVoice, to: playerGain(for: queue.activeTrack))
+
+      let fresh = TrackPlayback(reader: reader, voice: graph.activeVoice)
+      wire(fresh)
+      activePlayback = fresh
+      graph.cut(graph.activeVoice, to: 1)
+
+      // Scheduled at the position reached and then held, so the play button
+      // starts from where the listener was rather than from the top.
+      try fresh.start(atFrame: frame)
+      fresh.pause()
+      state = .paused
+      publishNowPlaying()
+    } catch {
+      activePlayback = nil
+      state = .paused
+      publishNowPlaying()
+      emit(.failed("audio could not be restarted after a media services reset: \(error)"))
+    }
+  }
+
   private func rebuildAfterConfigurationChange() {
     guard let playback = activePlayback, let reader = activeReader, reader.sampleRate > 0 else {
       return
@@ -1234,6 +1331,10 @@ public final class PlaybackEngine {
   /// crossfade has to fetch for itself.
   func discardPreloadForTesting() { preparedNext = nil }
   func finishActiveTrackForTesting() { handleTrackFinished(activePlayback) }
+  /// The notification itself is iOS-only and cannot be posted on a Mac, but
+  /// what it triggers is ordinary code — so the recovery is testable even
+  /// though the wiring that reaches it is not.
+  func recoverFromMediaServicesResetForTesting() { recoverFromMediaServicesReset() }
 
   /// Raise the stall and recovery signals the reader raises, so a test can
   /// check what the engine does with them without a network that misbehaves

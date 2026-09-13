@@ -28,8 +28,16 @@ public final class AudioGraph {
     public let gain: AVAudioMixerNode
   }
 
-  private let engine = AVAudioEngine()
-  private let eq: AVAudioUnitEQ
+  /**
+   `var`, not `let`, and that is the whole point of `rebuildAfterReset`.
+
+   An `AVAudioEngine` survives a route change — `handleConfigurationChange`
+   restarts the same object — but it does not survive the media server
+   restarting. Then every audio object this class holds is invalid and the only
+   remedy is new ones.
+   */
+  private var engine: AVAudioEngine
+  private var eq: AVAudioUnitEQ
 
   /**
    Whether the equalizer is currently out of the chain.
@@ -41,8 +49,24 @@ public final class AudioGraph {
    not observe. This is the only thing that distinguishes them.
    */
   public var isEqualizerBypassed: Bool { eq.bypass }
-  private let speed: AVAudioUnitTimePitch
+  private var speed: AVAudioUnitTimePitch
   private var fadeTimers: [Int: Timer] = [:]
+
+  /// The rate this graph was built at, kept so it can be built again the same
+  /// way. Only `rebuildAfterReset` needs it, and it has nowhere else to get it.
+  private let configuredSampleRate: Double
+
+  /**
+   The settings a rebuild has to put back, held as values rather than read off
+   the nodes.
+
+   Reading them back would mean asking objects the media server has already
+   invalidated what they were set to, which is the one question they cannot be
+   trusted to answer. Holding the model means the new nodes are configured from
+   what the user chose, not from the wreckage of the old ones.
+   */
+  private var appliedEqualizerBands: [(frequency: Float, gainDb: Float, q: Float)] = []
+  private var appliedSpeed: Float = 1.0
   public private(set) var voiceA: Voice
   public private(set) var voiceB: Voice
 
@@ -68,7 +92,34 @@ public final class AudioGraph {
    */
   public static let fixedSampleRate: Double = 48_000
 
+  /// Everything a graph is made of. Exists so the assembly below can be run
+  /// twice — once at init, once when the media server has invalidated the
+  /// first set — without either copy of it drifting from the other.
+  private struct Parts {
+    let engine: AVAudioEngine
+    let eq: AVAudioUnitEQ
+    let speed: AVAudioUnitTimePitch
+    let voiceA: Voice
+    let voiceB: Voice
+  }
+
   public init(sampleRate: Double = AudioGraph.fixedSampleRate) {
+    configuredSampleRate = sampleRate
+    let parts = AudioGraph.assemble(sampleRate: sampleRate)
+    engine = parts.engine
+    eq = parts.eq
+    speed = parts.speed
+    voiceA = parts.voiceA
+    voiceB = parts.voiceB
+  }
+
+  private static func assemble(sampleRate: Double) -> Parts {
+    let engine = AVAudioEngine()
+    let eq: AVAudioUnitEQ
+    let speed: AVAudioUnitTimePitch
+    let voiceA: Voice
+    let voiceB: Voice
+
     eq = AVAudioUnitEQ(numberOfBands: 10)
     eq.globalGain = 0
 
@@ -123,6 +174,8 @@ public final class AudioGraph {
 
     // Full scale on the active voice; the fade is done on the per-voice gain.
     voiceA.gain.outputVolume = 1
+
+    return Parts(engine: engine, eq: eq, speed: speed, voiceA: voiceA, voiceB: voiceB)
   }
 
   public func start() throws {
@@ -145,6 +198,56 @@ public final class AudioGraph {
    flight.
    */
   public func handleConfigurationChange() throws {
+    try start()
+  }
+
+  /**
+   Build the whole graph again, because the one it had is rubble.
+
+   `AVAudioSession.mediaServicesWereResetNotification` means `mediaserverd`
+   restarted. That is not a route change and `handleConfigurationChange` is not
+   enough for it: Apple's contract is that **every** audio object the process
+   holds is invalid afterwards — the engine, the player nodes, the mixers, the
+   units — and the only remedy is to throw them away and make new ones. An
+   engine restarted in place after a reset either refuses to start or runs
+   producing nothing, which is why the symptom is a player that looks entirely
+   healthy and makes no sound.
+
+   The voices are new objects when this returns, so every `Voice` the caller
+   was holding is stale. Whoever calls this has to re-read `activeVoice` and
+   build its playback again — the same requirement `handleConfigurationChange`
+   already imposes for a different reason, which is why `PlaybackEngine` has
+   somewhere to put it.
+
+   `activeIsA` is deliberately preserved. Which of a pair is foreground is this
+   class's own bookkeeping and has nothing to do with the media server;
+   resetting it here would swap the graph under a crossfade that is still
+   running upstairs.
+   */
+  public func rebuildAfterReset() throws {
+    for timer in fadeTimers.values { timer.invalidate() }
+    fadeTimers.removeAll()
+
+    // Not `stop()`. The old engine is invalid, and messaging it is exactly
+    // what the notification is warning about; letting ARC drop it is the whole
+    // of the teardown available.
+    let parts = AudioGraph.assemble(sampleRate: configuredSampleRate)
+    engine = parts.engine
+    eq = parts.eq
+    speed = parts.speed
+    voiceA = parts.voiceA
+    voiceB = parts.voiceB
+
+    // Assembly puts full scale on A, which is only right if A is foreground.
+    voiceA.gain.outputVolume = activeIsA ? 1 : 0
+    voiceB.gain.outputVolume = activeIsA ? 0 : 1
+
+    // The user's settings survive the media server; the nodes carrying them
+    // did not. Re-applied from the values rather than copied off the old
+    // units, which cannot be asked.
+    setSpeed(appliedSpeed)
+    setEqualizer(bands: appliedEqualizerBands)
+
     try start()
   }
 
@@ -208,6 +311,7 @@ public final class AudioGraph {
    */
   public func setSpeed(_ rate: Float) {
     let clamped = min(max(rate, 0.25), 4.0)
+    appliedSpeed = clamped
     speed.rate = clamped
     speed.bypass = clamped == 1.0
   }
@@ -215,6 +319,7 @@ public final class AudioGraph {
   public var currentSpeed: Float { speed.rate }
 
   public func setEqualizer(bands: [(frequency: Float, gainDb: Float, q: Float)]) {
+    appliedEqualizerBands = bands
     guard !bands.isEmpty, bands.contains(where: { $0.gainDb != 0 }) else {
       eq.bypass = true
       return

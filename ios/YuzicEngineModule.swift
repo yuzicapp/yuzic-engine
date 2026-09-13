@@ -89,6 +89,13 @@ public final class YuzicEngineModule: Module {
 
     AsyncFunction("setup") { (options: SetupOptions?) in
       try self.configureAudioSession(pauseOnBecomingNoisy: options?.pauseOnBecomingNoisy ?? true)
+      // The session is configured once, here — and a media services reset
+      // clears it. The engine cannot know what category this host wants, so
+      // it asks for the same call again rather than guessing one.
+      let pauseOnNoisy = options?.pauseOnBecomingNoisy ?? true
+      self.engine.reconfigureAudioSession = { [weak self] in
+        try self?.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
+      }
 
       if self.engine == nil {
         let graph = AudioGraph()

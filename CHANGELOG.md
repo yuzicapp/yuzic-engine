@@ -13,6 +13,28 @@ behaviour does not.
 
 ### Fixed
 
+- On iOS, **a media services reset left the player dead but looking healthy**:
+  a track sitting there showing paused, with transport controls that did
+  nothing, until the app was force-quit. Most often after a Bluetooth handover
+  or in a car.
+
+  `mediaserverd` is a separate process and it restarts — under memory
+  pressure, on a route handover. Apple's contract is that every audio object
+  the process holds is invalid afterwards: the engine, the player nodes, the
+  units, *and* the audio session category the host set once at setup.
+  `AVAudioSession.mediaServicesWereResetNotification` was not observed, so none
+  of it was put back. This was the fourth of the four ways iOS takes audio
+  away, and the only one with no handling at all.
+
+  `AudioGraph.rebuildAfterReset` now discards the graph and assembles a new
+  one — a restart in place, which is all a route change needs, does not survive
+  this — re-applying the listener's equalizer curve and playback speed from the
+  settings rather than reading them off units that can no longer be asked. The
+  engine reclaims the session first, keeps the open reader, and comes back
+  paused at the position reached rather than resuming: a reset is a crash the
+  audio system just had, and starting music out of whatever output iOS settles
+  on afterwards is a guess.
+
 - On iOS, a **transcoded stream that broke mid-track** could end the song
   silently and advance the queue. The listener heard a track stop part-way
   through — often around the same point in the same song — and the next one
