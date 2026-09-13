@@ -11,6 +11,12 @@ behaviour does not.
 
 ## [Unreleased]
 
+## [1.0.6]
+
+Two ways a track could stop playing with nothing reported anywhere. Both are
+iOS-only and both are native implementation detail: no change to the
+JavaScript API, the event vocabulary or the exported types.
+
 ### Fixed
 
 - On iOS, **a media services reset left the player dead but looking healthy**:
