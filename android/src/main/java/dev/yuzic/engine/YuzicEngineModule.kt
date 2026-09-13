@@ -15,6 +15,7 @@ import androidx.media3.session.SessionToken
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import com.google.common.util.concurrent.ListenableFuture
+import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -25,6 +26,16 @@ import okhttp3.Callback
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
+
+/**
+ * A command arrived before the engine existed.
+ *
+ * The same error iOS raises from `requireEngine`, worded the same way, so a
+ * host looking at a rejection cannot tell which platform it came from.
+ */
+internal class EngineNotSetUpException : CodedException(
+  "the engine is not set up — call setup() and wait for it before any command"
+)
 
 /**
  * The Expo module surface — the thin part. Everything of substance lives in
@@ -74,6 +85,7 @@ class YuzicEngineModule : Module() {
       // Honoured, unlike on iOS, which declares the same field and then ticks
       // at a hardcoded 250ms regardless. Worth not copying: the host asked.
       progressIntervalMs = (options?.progressIntervalMs ?: 1000).coerceAtLeast(100).toLong()
+      awaitService()
       onMain { startObserving() }
     }
 
@@ -192,11 +204,15 @@ class YuzicEngineModule : Module() {
     }
 
     AsyncFunction("clearQueue") {
+      // Before anything is cleared, as iOS does: a clear that empties the app's
+      // idea of the queue and leaves the player holding the old one is worse
+      // than one that refuses outright and says why.
+      val player = requireGraph().activeVoice.player
       queue.clear()
       cancelTransition()
       onMain {
         artworkRequestToken += 1
-        PlaybackService.graph?.activeVoice?.player?.clearMediaItems()
+        player.clearMediaItems()
       }
       TrackHeaders.clear()
       commandsMayHaveChanged()
@@ -220,11 +236,10 @@ class YuzicEngineModule : Module() {
         "all" -> Player.REPEAT_MODE_ALL
         else -> Player.REPEAT_MODE_OFF
       }
+      val graph = requireGraph()
       onMain {
-        PlaybackService.graph?.let { graph ->
-          graph.voiceA.player.repeatMode = media3
-          graph.voiceB.player.repeatMode = media3
-        }
+        graph.voiceA.player.repeatMode = media3
+        graph.voiceB.player.repeatMode = media3
       }
       // `all` gives the last track a next and `off` takes it away again.
       commandsMayHaveChanged()
@@ -293,11 +308,10 @@ class YuzicEngineModule : Module() {
     // them would be heard as the two drifting apart.
     AsyncFunction("setSpeed") { speed: Double ->
       val rate = speed.coerceIn(0.25, 4.0).toFloat()
+      val graph = requireGraph()
       onMain {
-        PlaybackService.graph?.let { graph ->
-          graph.voiceA.player.setPlaybackSpeed(rate)
-          graph.voiceB.player.setPlaybackSpeed(rate)
-        }
+        graph.voiceA.player.setPlaybackSpeed(rate)
+        graph.voiceB.player.setPlaybackSpeed(rate)
       }
     }
 
@@ -554,9 +568,65 @@ class YuzicEngineModule : Module() {
     }, (fadeSeconds * 1000).toLong())
   }
 
-  /** Fire-and-forget onto the active voice. Does nothing before `setup`. */
+  /**
+   * Wait for the service, and therefore for the graph, to exist.
+   *
+   * `configureAudioSession` starts the service by binding a `MediaController`,
+   * and `buildAsync` is exactly what it says — it returns immediately and the
+   * service is created some time later, in `PlaybackService.onCreate`, which is
+   * where `graph` comes from. Nothing used to wait for that, so `setup()`
+   * resolved while the graph was still null.
+   *
+   * The host takes `setup` resolving as "the engine is ready" and releases
+   * every queued command on it. Those commands then found no graph and were
+   * optional-chained into silence: the app opened on a cold launch, showed the
+   * restored queue, and sat paused with nothing in any log. `startObserving`
+   * had already returned early for the same reason, so no state or progress
+   * events were flowing either — which is why it looked like a dead player
+   * rather than a slow one.
+   *
+   * Blocking is safe here and nowhere near the main thread: an `AsyncFunction`
+   * body runs on Expo's module queue, and the future completes on the main
+   * looper. The timeout is the point of the bound — a service that never binds
+   * must not hold `setup` open for the life of the process, and the commands
+   * that follow will reject by name rather than vanish.
+   */
+  private fun awaitService() {
+    val future = controllerFuture ?: return
+    try {
+      future.get(SERVICE_START_TIMEOUT_SEC, TimeUnit.SECONDS)
+    } catch (_: Throwable) {
+      // Swallowed deliberately, and it is the one swallow left: setup has done
+      // everything else it can, and failing it outright would leave the host
+      // with no engine at all rather than one whose commands report why they
+      // cannot run.
+    }
+  }
+
+  /**
+   * The graph, or a thrown error — never a silent no-op.
+   *
+   * Used by commands. Getters keep their fallbacks on purpose, which is the
+   * same split iOS makes in `requireEngine`: "nothing is playing" is a truthful
+   * answer before setup, and a progress poll that throws during launch would be
+   * noise rather than signal.
+   */
+  private fun requireGraph(): AudioGraph =
+    PlaybackService.graph ?: throw EngineNotSetUpException()
+
+  /**
+   * Fire-and-forget onto the active voice.
+   *
+   * The check is deliberately *outside* `onMain`. A command posted to the main
+   * thread and only then found to have no graph has already resolved its
+   * promise successfully, so the failure has nowhere left to go — the listener
+   * presses play, nothing happens, and nothing is reported. Resolving the
+   * player here means the throw happens on the calling thread and reaches the
+   * host as a rejection, which is what iOS has always done.
+   */
   private fun onPlayer(block: (ExoPlayer) -> Unit) {
-    onMain { PlaybackService.graph?.activeVoice?.player?.let(block) }
+    val player = requireGraph().activeVoice.player
+    onMain { block(player) }
   }
 
   private fun onMain(block: () -> Unit) {
@@ -1172,6 +1242,16 @@ class YuzicEngineModule : Module() {
   }
 
   companion object {
+    /**
+     * How long `setup` waits for the service to bind.
+     *
+     * Generous, because this happens once per process and the alternative to
+     * waiting is the silent dead player it exists to prevent. Bounded, because
+     * a service that never binds must not hold `setup` open forever — the host
+     * would sit behind its own readiness gate with no engine and no error.
+     */
+    private const val SERVICE_START_TIMEOUT_SEC = 10L
+
     /**
      * Whether it is time to start fading into the next track.
      *
