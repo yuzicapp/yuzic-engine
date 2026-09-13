@@ -122,6 +122,17 @@ public final class PlaybackEngine {
   public static let maxStreamReconnects = 3
 
   /**
+   How far short of the track's real length an "end of file" may land before it
+   is disbelieved.
+
+   Five seconds is past anything an ending can honestly disagree by — encoder
+   padding and gapless trims are fractions of a second, and the tag a host
+   reads is rounded to whole ones — and far short of the shortfall a truncation
+   produces, which is the rest of the song.
+   */
+  public static let truncationToleranceSec: Double = 5
+
+  /**
    A reader for the next track, opened before anything asks for it.
 
    A skip that has to fetch is a skip that waits, and on cellular a lossless
@@ -1142,6 +1153,18 @@ public final class PlaybackEngine {
         self.cancelTransition()
       }
       guard finished == nil || finished === self.activePlayback else { return }
+      // An end that arrived a long way before the end of the song is not one.
+      if self.endedShortOfItsLength() {
+        if self.reconnectStream() { return }
+        // Out of reconnections, and advancing now would be the silent skip
+        // this check exists to stop. Said out loud instead, the same way a
+        // stream lost with an error is.
+        let title = self.queue.activeTrack?.title ?? "this track"
+        self.state = .paused
+        self.publishNowPlaying()
+        self.emit(.failed("\(title) stopped before it ended"))
+        return
+      }
       let listened = self.listenedSeconds()
       // Asks the queue rather than adding one, so repeat is honoured in the
       // one place it has to be: `.one` returns the same index and the track
@@ -1161,6 +1184,47 @@ public final class PlaybackEngine {
         self.emit(.failed("Could not open \(title): \(error)"))
       }
     }
+  }
+
+  /**
+   Whether the track that just "ended" stopped a long way short of its length.
+
+   The sequential transport is the one that can end a track early with nothing
+   thrown anywhere. `TrackPlayback` treats a read that returns no frames and no
+   error as the genuine end of the file, which is the only thing it can do from
+   there — and a transcode whose connection dies produces exactly that.
+   `StreamingByteSource` is marked finished by its producer's `onFinish`,
+   `totalBytes()` drops from the estimate to the bytes that actually arrived,
+   and the next read comes back empty at what is now, by every measure the
+   reader has, the end of the file. `AudioFileReader` duly returns
+   `kAudioFileEndOfFileError`, which is correct and useless.
+
+   Nothing on that path throws, so all of the recovery below it is bypassed:
+   the retry ladder, the stall signal, `reconnectStream`. The queue simply
+   advances. What the listener gets is a song stopping thirty seconds in and
+   the next one starting, with no error, no buffering spinner and nothing in
+   any log — the same symptom the read-failure work already fixed, arriving by
+   the one route that does not look like a failure.
+
+   The length is what catches it, because it is the one fact the broken
+   transport cannot forge: it comes from the host's metadata, not from the
+   bytes. `track.durationSec` rather than `trustedDuration` for that reason —
+   the latter falls back to a reader-derived length, and on this transport that
+   length is the guess that is already wrong.
+
+   Excluded, deliberately:
+
+   - The ranged transport, whose length is the server's `Content-Length` and
+     whose end really is the end.
+   - Live radio, which has no length to fall short of.
+   - A host that did not say how long the track is, leaving nothing to check
+     against.
+   */
+  private func endedShortOfItsLength() -> Bool {
+    guard let reader = activeReader, reader.isSequential else { return false }
+    guard let track = queue.activeTrack, !track.continuous else { return false }
+    guard let declared = track.durationSec, declared > 0 else { return false }
+    return progress.positionSec < declared - Self.truncationToleranceSec
   }
 
   // Test seams: driving these through real timing would need a track long

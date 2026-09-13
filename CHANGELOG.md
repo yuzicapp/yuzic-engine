@@ -11,6 +11,31 @@ behaviour does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- On iOS, a **transcoded stream that broke mid-track** could end the song
+  silently and advance the queue. The listener heard a track stop part-way
+  through — often around the same point in the same song — and the next one
+  begin, over the network only, with no error and no buffering spinner.
+
+  This is the last route by which a broken stream reached the listener as a
+  skip, and it survived the earlier fixes because it does not look like a
+  failure anywhere along its length. `TrackPlayback` treats a read that returns
+  no frames and no error as the genuine end of the file, which is the only
+  thing it can conclude from there — and a dead transcode produces exactly
+  that: `StreamingByteSource` is marked finished by its producer,
+  `totalBytes()` drops from the estimate to the bytes that arrived, and the
+  next read comes back empty at what is now the end of the file by every
+  measure the reader has. So `onEndOfTrack` fired rather than `onReadFailed`,
+  and the retry ladder, the stall signal and the stream reconnection were all
+  stepped over.
+
+  An end of file that lands more than five seconds short of the length the host
+  declared is no longer believed on the sequential transport. It is picked back
+  up with `timeOffset` like any other lost stream, and reported as a failure if
+  it cannot be. The ranged transport, live radio, and tracks whose length the
+  host never stated are untouched.
+
 ## [1.0.3]
 
 ### Fixed
