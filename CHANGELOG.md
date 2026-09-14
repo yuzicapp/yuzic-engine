@@ -11,6 +11,21 @@ behaviour does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **1.0.6, 1.0.7 and 1.0.8 do not compile for iOS.** `setup()` assigned
+  `reconfigureAudioSession` through `self.engine` before the block that
+  creates the engine, so the optional was never unwrapped and the module
+  failed to build in any host app. Written as `engine?.` it would have
+  compiled and been worse: on the first `setup()` there is no engine yet, so
+  the hook would install nothing, and a media services reset would leave a
+  player that cannot make sound — the fault 1.0.6 was released to fix. The
+  hook is now installed after the engine exists, on every `setup()`.
+
+  CI did not catch it because `swift test` compiles only `ios/Core` through
+  `Package.swift`; the module file is compiled by a host app's build, and no
+  check runs one for iOS.
+
 ## [1.0.8]
 
 ### Fixed

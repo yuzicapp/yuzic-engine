@@ -88,14 +88,8 @@ public final class YuzicEngineModule: Module {
     // MARK: lifecycle
 
     AsyncFunction("setup") { (options: SetupOptions?) in
-      try self.configureAudioSession(pauseOnBecomingNoisy: options?.pauseOnBecomingNoisy ?? true)
-      // The session is configured once, here — and a media services reset
-      // clears it. The engine cannot know what category this host wants, so
-      // it asks for the same call again rather than guessing one.
       let pauseOnNoisy = options?.pauseOnBecomingNoisy ?? true
-      self.engine.reconfigureAudioSession = { [weak self] in
-        try self?.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
-      }
+      try self.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
 
       if self.engine == nil {
         let graph = AudioGraph()
@@ -130,6 +124,15 @@ public final class YuzicEngineModule: Module {
           // collapse. That is the opposite of a fade to sleep.
           graph.fade(graph.activeVoice, to: 0, over: fade, curve: .linear) { self.engine?.pause() }
         }
+      }
+
+      // The session is configured once, above — and a media services reset
+      // clears it. The engine cannot know what category this host wants, so
+      // it asks for the same call again rather than guessing one. Installed
+      // after the engine exists, and on every setup, so a setup that changes
+      // `pauseOnBecomingNoisy` re-arms the hook with the new value.
+      self.engine?.reconfigureAudioSession = { [weak self] in
+        try self?.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
       }
     }
 
