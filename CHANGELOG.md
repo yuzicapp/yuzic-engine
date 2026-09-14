@@ -11,6 +11,19 @@ behaviour does not.
 
 ## [Unreleased]
 
+## [1.0.10]
+
+### Fixed
+
+- **Android started playing every queue it was given.** `setQueue` loaded the
+  active track with `play = true`, so a queue the host meant to leave paused —
+  one restored on a cold launch, or reloaded by toggling shuffle while paused —
+  began sounding with nothing pressed. The contract says `setQueue` does not
+  start playback, and iOS already kept it. Android now loads without playing;
+  a host that wants sound calls `play`, which the serial async-function queue
+  delivers after the load. Nothing is paused either, so a `play` already given
+  is kept. Android Auto selections are unaffected: they never reach `setQueue`.
+
 ## [1.0.9]
 
 ### Fixed
