@@ -120,7 +120,21 @@ class YuzicEngineModule : Module() {
       queue.set(tracks, startIndex ?: 0)
       tracks.forEach { TrackHeaders.register(it.uri, it.headers) }
       cancelTransition()
-      loadActiveTrack()
+      // Loaded, not started. The contract (`AudioEngine.setQueue`) is that
+      // playback does not start, and iOS keeps it — its `setQueue` stops and
+      // goes idle. Android called `loadActiveTrack()` with its default
+      // `play = true`, so every queue the host loaded to sit paused began
+      // sounding anyway: a queue restored on cold launch, or a shuffle toggled
+      // while paused, started playing with nothing pressed. A host that wants
+      // sound calls `play` next; the async-function queue is serial and both
+      // post to the main looper, so that `play` lands after this load.
+      // Nothing is paused here either, so a `play` already given is kept.
+      //
+      // Android Auto is deliberately not touched by this. A car selection never
+      // reaches `setQueue`: `PlaybackService` overrides neither
+      // `onAddMediaItems` nor `onSetMediaItems`, so Media3's default controller
+      // path (setMediaItems, prepare, play) starts playback on its own.
+      loadActiveTrack(play = false)
       // Unconditionally, because the interesting case is the empty one.
       // `loadActiveTrack` returns early when there is no active track, so
       // `setQueue(emptyList())` takes the queue from n tracks to none while
@@ -137,7 +151,7 @@ class YuzicEngineModule : Module() {
       // there the event comes from `beginTrack`, which runs for the first
       // track too) knew nothing until the second track began. `setQueue` is
       // this side's `beginTrack`: `loadActiveTrack` above has already made
-      // the track active and started it.
+      // the track active, though it sounds only once the host calls `play`.
       queue.activeTrack?.let { active ->
         sendEvent(
           "onTrackChange",
