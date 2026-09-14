@@ -11,6 +11,8 @@ behaviour does not.
 
 ## [Unreleased]
 
+## [1.0.9]
+
 ### Fixed
 
 - **1.0.6, 1.0.7 and 1.0.8 do not compile for iOS.** `setup()` assigned
