@@ -255,6 +255,23 @@ public final class PlaybackEngine {
   /// that *this* engine paused — not playback the user had already stopped.
   private var pausedByInterruption = false
 
+  /**
+   Where to pick the active track back up once audio can play again.
+
+   Set whenever the system takes the audio graph away from a loaded track — an
+   interruption, a format or route change — and read by the next thing that
+   starts audio. Kept as a position over the *same* reader rather than dropping
+   the playback, because dropping it is what used to send the next play back to
+   0:00, re-open the stream over the network, and announce the same track to
+   the host a second time.
+   */
+  private var pendingRestart: (frame: Int64, origin: Int64)?
+
+  /// The system has stopped the engine (or invalidated it) since it last ran.
+  /// Anything that starts audio reclaims the session and the graph first.
+  private var graphNeedsRestart = false
+  private var graphNeedsReset = false
+
   /// Injectable so the listened-time tests do not have to sleep.
   private let now: () -> Date
 
@@ -496,6 +513,129 @@ public final class PlaybackEngine {
     wasPausedByUs && systemSaysResume
   }
 
+  /**
+   Another app, a call, Siri or an alarm has taken the audio.
+
+   The system stops the engine when it deactivates the session, and says
+   nothing to the nodes: every buffer scheduled on them is gone, and a player
+   node told to play again on that engine raises rather than failing. So the
+   position is taken now and the playback released, and whatever next starts
+   audio — the interruption ending, or play from the app, the lock screen,
+   AirPods or the car — rebuilds it there instead of resuming a corpse.
+
+   Handled the same whether or not an end ever arrives, which is the case that
+   used to break: an app that keeps a non-mixable session (remote desktop,
+   video) often never sends one, or sends it without `.shouldResume`, and the
+   listener comes back and presses play.
+   */
+  func interruptionBegan() {
+    pausedByInterruption = state == .playing || state == .buffering
+    graphNeedsRestart = true
+    holdActivePlaybackForRestart()
+    pause()
+  }
+
+  /// The interruption is over. Resumes only what it paused, and only when the
+  /// system says so — see `shouldResumeAfterInterruption`. Otherwise the
+  /// engine stays paused at the position it had, ready for the next play.
+  func interruptionEnded(shouldResume: Bool) {
+    let resume = Self.shouldResumeAfterInterruption(
+      wasPausedByUs: pausedByInterruption, systemSaysResume: shouldResume
+    )
+    pausedByInterruption = false
+    if resume { try? play() }
+  }
+
+  /**
+   Release the active playback and remember where it was.
+
+   Idempotent: a second teardown before anything restarted must not overwrite
+   the position with the frame of a playback that has already been stopped.
+   */
+  private func holdActivePlaybackForRestart() {
+    guard pendingRestart == nil, let playback = activePlayback, activeReader != nil else { return }
+    pendingRestart = (playback.currentFrame, playback.readerOrigin)
+    cancelTransition()
+    playback.stopAndWait()
+  }
+
+  /**
+   Make sure audio can be started: the session active and the graph running.
+
+   Every path that starts sound goes through here. Before, only the interruption
+   ending with `.shouldResume` re-activated the session and none of them
+   restarted the engine, so play after any other interruption resumed a node on
+   a stopped engine.
+
+   A failure leaves the engine paused, with the position and the track kept,
+   and is not reported as a playback failure. The usual reason is that another
+   app still holds the audio — a call in progress — and a failure event would
+   have the host retry or drop a track that is perfectly playable. Pressing play
+   again once the other app lets go works.
+   */
+  private func reclaimAudioIfNeeded() throws {
+    guard graphNeedsReset || graphNeedsRestart || !graph.isRunning else { return }
+    do {
+      if let reconfigure = reconfigureAudioSession {
+        try reconfigure()
+      } else {
+        #if os(iOS) || os(tvOS)
+        try AVAudioSession.sharedInstance().setActive(true)
+        #endif
+      }
+      if graphNeedsReset {
+        try graph.rebuildAfterReset()
+      } else {
+        try graph.start()
+      }
+      graphNeedsReset = false
+      graphNeedsRestart = false
+    } catch {
+      NSLog("[yuzic-engine] audio could not be reclaimed: \(error)")
+      state = .paused
+      closeListeningStretch()
+      stopTicking()
+      publishNowPlaying()
+      throw error
+    }
+  }
+
+  /**
+   Rebuild the active track's playback at `frame`, over the reader it already has.
+
+   No reopen and no track-change event: this is the same second of the same
+   song, and the host already knows what is playing. State goes to `.buffering`
+   and on to `.playing` when a buffer is actually scheduled, so the host, the
+   lock screen and the car see what is really happening.
+   */
+  private func restartActivePlayback(atFrame frame: Int64, readerOrigin: Int64) throws {
+    guard let reader = activeReader, reader.sampleRate > 0 else {
+      startTrack(at: queue.activeIndex, fromFrame: frame)
+      return
+    }
+    cancelTransition()
+    activePlayback?.stopAndWait()
+    graph.reconnect(graph.activeVoice, toSourceRate: reader.sampleRate)
+    graph.setTrackGain(graph.activeVoice, to: playerGain(for: queue.activeTrack))
+    graph.cut(graph.activeVoice, to: 1)
+
+    let fresh = TrackPlayback(reader: reader, voice: graph.activeVoice)
+    wire(fresh)
+    fresh.onFirstBufferScheduled = { [weak self, weak fresh] in
+      DispatchQueue.main.async {
+        guard let self, self.activePlayback === fresh, self.state == .buffering else { return }
+        self.state = .playing
+        self.publishNowPlaying()
+      }
+    }
+    activePlayback = fresh
+    state = .buffering
+    try fresh.start(atFrame: frame, readerOrigin: readerOrigin)
+    if listeningSince == nil { listeningSince = now() }
+    publishNowPlaying()
+    startTicking()
+  }
+
   #if os(iOS) || os(tvOS)
   private func handleInterruption(_ note: Notification) {
     guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -503,22 +643,11 @@ public final class PlaybackEngine {
 
     switch type {
     case .began:
-      pausedByInterruption = state == .playing || state == .buffering
-      pause()
+      interruptionBegan()
     case .ended:
       let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
         .map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
-      let resume = Self.shouldResumeAfterInterruption(
-        wasPausedByUs: pausedByInterruption,
-        systemSaysResume: options.contains(.shouldResume)
-      )
-      pausedByInterruption = false
-      if resume {
-        // The session was deactivated under us; it has to be reclaimed before
-        // the graph will run again.
-        try? AVAudioSession.sharedInstance().setActive(true)
-        try? play()
-      }
+      interruptionEnded(shouldResume: options.contains(.shouldResume))
     @unknown default:
       break
     }
@@ -568,7 +697,8 @@ public final class PlaybackEngine {
     // been, asking that node where it is traps — `lastRenderTime` asserts on a
     // node with no engine, which is a crash rather than a nil. The same
     // ordering `rebuildAfterConfigurationChange` keeps, for the same reason.
-    let frame = activePlayback?.currentFrame ?? 0
+    let frame = pendingRestart?.frame ?? activePlayback?.currentFrame ?? 0
+    let origin = pendingRestart?.origin ?? activePlayback?.readerOrigin ?? 0
     activePlayback?.stopAndWait()
     activePlayback = nil
 
@@ -577,12 +707,19 @@ public final class PlaybackEngine {
       // category, and after a reset it has none.
       try reconfigureAudioSession?()
       try graph.rebuildAfterReset()
+      graphNeedsReset = false
+      graphNeedsRestart = false
     } catch {
+      // Kept rather than dropped: the next play tries the rebuild again and
+      // picks the track up where it was, instead of starting it over.
+      graphNeedsReset = true
+      if activeReader != nil { pendingRestart = (frame, origin) }
       state = .paused
       publishNowPlaying()
       emit(.failed("audio could not be restarted after a media services reset: \(error)"))
       return
     }
+    pendingRestart = nil
 
     guard let reader = activeReader, reader.sampleRate > 0 else {
       state = .paused
@@ -601,7 +738,7 @@ public final class PlaybackEngine {
 
       // Scheduled at the position reached and then held, so the play button
       // starts from where the listener was rather than from the top.
-      try fresh.start(atFrame: frame)
+      try fresh.start(atFrame: frame, readerOrigin: origin)
       fresh.pause()
       state = .paused
       publishNowPlaying()
@@ -613,49 +750,45 @@ public final class PlaybackEngine {
     }
   }
 
+  /**
+   The system stopped the engine for a route or format change.
+
+   AirPods switching to their microphone profile, another app changing the
+   hardware rate, a voice memo taking the route, a car connecting: the engine
+   is stopped and every scheduled buffer discarded. The position is held and
+   the playback released either way.
+
+   Playing, it is picked straight back up. Paused — including paused by an
+   interruption, when the session is inactive and the engine cannot start at
+   all — it is left paused and the next play rebuilds it. That second case
+   used to try to start the engine anyway, fail, drop the playback and report a
+   playback failure: the next play started the song over, re-opened the
+   stream, and the host was told about a broken track that was not broken.
+   */
   private func rebuildAfterConfigurationChange() {
-    guard let playback = activePlayback, let reader = activeReader, reader.sampleRate > 0 else {
+    let wasPlaying = state == .playing || state == .buffering
+    graphNeedsRestart = true
+    // Nothing loaded: the next track to start reclaims the graph first.
+    guard activePlayback != nil, activeReader != nil else { return }
+    holdActivePlaybackForRestart()
+    guard wasPlaying, let pending = pendingRestart else {
+      publishNowPlaying()
       return
     }
-    let frame = playback.currentFrame
-    let resume = state == .playing || state == .buffering
-
-    playback.stopAndWait()
-
     do {
-      try graph.handleConfigurationChange()
-      graph.reconnect(graph.activeVoice, toSourceRate: reader.sampleRate)
-
-      let fresh = TrackPlayback(reader: reader, voice: graph.activeVoice)
-      wire(fresh)
-      fresh.onFirstBufferScheduled = { [weak self, weak fresh] in
-        DispatchQueue.main.async {
-          guard let self, self.activePlayback === fresh, self.state == .buffering else { return }
-          self.state = .playing
-          self.publishNowPlaying()
-        }
-      }
-      activePlayback = fresh
-      graph.cut(graph.activeVoice, to: 1)
-
-      if resume {
-        state = .buffering
-        try fresh.start(atFrame: frame)
-      } else {
-        // Rebuilt but left where it was: a route change while paused should
-        // not start the music.
-        try fresh.start(atFrame: frame)
-        fresh.pause()
-      }
-      publishNowPlaying()
+      try reclaimAudioIfNeeded()
+      pendingRestart = nil
+      try restartActivePlayback(atFrame: pending.frame, readerOrigin: pending.origin)
     } catch {
-      // The old playback was stopped at the top of this function, so leaving it
-      // in place would leave the engine holding something that can never sound
-      // again — and `play()` would keep resuming it. Dropping it means the next
-      // play starts the track properly instead.
-      activePlayback = nil
-      state = .paused
-      emit(.failed("audio graph could not be rebuilt after a route change: \(error)"))
+      // Held for the next play; `reclaimAudioIfNeeded` has already left the
+      // engine paused and said so.
+      pendingRestart = pending
+      if state != .paused {
+        state = .paused
+        closeListeningStretch()
+        stopTicking()
+        publishNowPlaying()
+      }
     }
   }
 
@@ -686,6 +819,28 @@ public final class PlaybackEngine {
      Restarting from `currentFrame` puts the needle back where it was rather
      than at the top of the track.
      */
+    // Audio first: after an interruption or a route change the session is
+    // inactive and the engine stopped, and nothing below can play into that.
+    try reclaimAudioIfNeeded()
+
+    // The system took the graph away from a loaded track: rebuild it where it
+    // was, over the same reader, rather than resuming a node whose buffers are
+    // gone or re-opening the stream from the top.
+    if let pending = pendingRestart {
+      pendingRestart = nil
+      do {
+        try restartActivePlayback(atFrame: pending.frame, readerOrigin: pending.origin)
+      } catch {
+        pendingRestart = pending
+        state = .paused
+        closeListeningStretch()
+        stopTicking()
+        publishNowPlaying()
+        throw error
+      }
+      return
+    }
+
     if let playback = activePlayback, playback.isFinished {
       startTrack(at: queue.activeIndex, fromFrame: playback.currentFrame)
       return
@@ -741,6 +896,11 @@ public final class PlaybackEngine {
 
   public func seek(toSeconds seconds: Double) throws {
     guard let reader = activeReader else { return }
+    // A scrub from the lock screen after an interruption is a play at a new
+    // position: the graph has to be back first, and the held position is
+    // superseded by the one asked for.
+    try reclaimAudioIfNeeded()
+    pendingRestart = nil
     // A seek during a fade would leave the other voice playing the wrong part
     // of the wrong track; collapse the transition first.
     cancelTransition()
@@ -1237,6 +1397,10 @@ public final class PlaybackEngine {
     let track = queue.tracks[index]
 
     state = .buffering
+    // A skip or an advance after an interruption starts audio too. A new track
+    // supersedes whatever position was held for the old one.
+    try reclaimAudioIfNeeded()
+    pendingRestart = nil
     // Always handed a reader that is already open. This used to open one
     // itself when given none, on whatever thread called — see `startTrack` for
     // what that cost.
@@ -1398,6 +1562,12 @@ public final class PlaybackEngine {
   /// what it triggers is ordinary code — so the recovery is testable even
   /// though the wiring that reaches it is not.
   func recoverFromMediaServicesResetForTesting() { recoverFromMediaServicesReset() }
+  /// The configuration-change notification cannot be made to fire on cue, but
+  /// what it triggers is ordinary code.
+  func configurationChangedForTesting() { rebuildAfterConfigurationChange() }
+  /// What the system does to the graph when it takes audio away: stop it.
+  func stopGraphForTesting() { graph.stop() }
+  var graphIsRunningForTesting: Bool { graph.isRunning }
 
   /// Raise the stall and recovery signals the reader raises, so a test can
   /// check what the engine does with them without a network that misbehaves
@@ -1727,6 +1897,7 @@ public final class PlaybackEngine {
     // `setQueue` or `stop` arriving while a track was opening was followed by
     // that track starting anyway, into a queue that no longer holds it.
     openToken &+= 1
+    pendingRestart = nil
     cancelTransition()
     activePlayback?.stop()
     activePlayback = nil

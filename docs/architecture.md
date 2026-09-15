@@ -131,6 +131,43 @@ it implicit, and CarPlay showed "paused" while audio was playing on the first
 track of a session — fixed downstream by patching the library. An engine that
 owns the session should never need that patch to exist.
 
+### When the system takes the audio away
+
+A call, Siri, an alarm, another app with a non-mixable session, a voice memo,
+AirPods switching to their microphone, a car connecting: each either
+interrupts the session or changes the route or format, and every one of them
+stops `AVAudioEngine` and discards the buffers scheduled on it. Nothing tells
+the nodes, and `AVAudioPlayerNode.play()` on a stopped engine raises an
+Objective-C exception rather than returning an error.
+
+So the engine does not try to resume what it had. When the audio is taken it
+holds the active track's position (`pendingRestart`) and releases the
+playback. Whatever next starts audio — the interruption ending with
+`.shouldResume`, or play from the app, the lock screen, AirPods or the car; a
+seek; a skip; the automatic advance — first reclaims the session and the
+graph (`reclaimAudioIfNeeded`), then rebuilds the playback at that position
+over the same reader. Same second, same stream, no second track-change event,
+and `.buffering` until a buffer is really scheduled.
+
+Two rules follow from what actually happens on a phone:
+
+- **No end may be assumed.** An app that holds a non-mixable session often
+  never sends `.ended`, or sends it without `.shouldResume`. Recovery hangs off
+  the next play, not off the notification.
+- **Audio still taken is not a broken track.** If the session cannot be
+  re-activated — a call still in progress — the engine stays paused with the
+  position kept and emits no failure. A failure event would have the host retry
+  or drop a track that is fine; pressing play again once the other app lets go
+  works.
+
+A route or format change while *playing* is picked straight back up; while
+paused, including during an interruption, it is left for the next play. That
+second case used to start the engine into an inactive session, fail, drop the
+playback and report a failure. `InterruptionRecoveryTests` drives all of this
+through `interruptionBegan`, `interruptionEnded(shouldResume:)` and the
+configuration-change handler with the graph stopped the way the system stops
+it; the notifications themselves cannot be posted from a Mac test.
+
 ## 5. Expo Modules, not Nitro
 
 The perf argument for Nitro does not apply here: **nothing high-frequency

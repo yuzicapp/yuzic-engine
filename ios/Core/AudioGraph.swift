@@ -178,6 +178,16 @@ public final class AudioGraph {
     return Parts(engine: engine, eq: eq, speed: speed, voiceA: voiceA, voiceB: voiceB)
   }
 
+  /**
+   Whether the graph can produce sound right now.
+
+   The system stops the engine without asking — an interruption, a route or
+   format change — and nothing about the nodes says so afterwards. A player
+   node told to play on a stopped engine raises an Objective-C exception, which
+   no Swift `catch` stops, so everything that starts audio asks this first.
+   */
+  public var isRunning: Bool { engine.isRunning }
+
   public func start() throws {
     guard !engine.isRunning else { return }
     engine.prepare()

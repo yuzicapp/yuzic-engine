@@ -186,12 +186,19 @@ public final class TrackPlayback {
    from throwing the progress bar back to 0:00.
    */
   public func start(atFrame frame: Int64 = 0, readerOrigin: Int64 = 0) throws {
+    // Asked before anything moves. `AVAudioPlayerNode.play()` on a stopped
+    // engine raises an Objective-C exception rather than returning an error,
+    // and the system stops the engine whenever it takes audio away — so this
+    // was a crash waiting behind every interruption.
+    guard voice.player.engine?.isRunning == true else { throw PlaybackError.graphNotRunning }
+
     lock.lock()
     stopped = false
     reachedEnd = false
     scheduledAhead = 0
     scheduledAny = false
     startFrameValue = frame
+    readerOriginValue = readerOrigin
     consecutiveFailures = 0
     stalledSince = nil
     lock.unlock()
@@ -201,9 +208,27 @@ public final class TrackPlayback {
     voice.player.play()
   }
 
+  public enum PlaybackError: Error, Equatable {
+    /// The engine this voice belongs to is not running, so nothing can play.
+    case graphNotRunning
+  }
+
+  /// Which frame of the track the reader's own frame zero is — see `start`.
+  /// Kept so the playback can be rebuilt at the same place after the system
+  /// tears the graph down, without losing a reconnected stream's offset.
+  public var readerOrigin: Int64 {
+    lock.lock(); defer { lock.unlock() }
+    return readerOriginValue
+  }
+  private var readerOriginValue: Int64 = 0
+
   public func pause() { voice.player.pause() }
 
+  /// Resume a paused node. Does nothing on a stopped engine — see `start` —
+  /// which the engine avoids by rebuilding instead of resuming after the
+  /// system has taken audio away.
   public func resume() {
+    guard voice.player.engine?.isRunning == true else { return }
     voice.player.play()
     // A long pause can drain the queue; top it up rather than waiting for a
     // completion callback that is never going to arrive.

@@ -150,6 +150,13 @@ public final class YuzicEngineModule: Module {
 
     // MARK: queue
     //
+    // Everything that reads or moves the engine runs on the main queue. The
+    // engine is driven from main by everything else that touches it — the
+    // ticker, the lock screen and car commands, and the system's interruption,
+    // route and media-reset notifications — and Expo's default is a background
+    // queue of its own, so a play from JavaScript could race an interruption
+    // handler over the same playback and graph.
+    //
     // The queue lives here, natively, and not in JavaScript. Backgrounded JS is
     // suspended, and the next track still has to start, the lock screen still
     // has to update, and the car still has to answer its buttons.
@@ -157,16 +164,16 @@ public final class YuzicEngineModule: Module {
     AsyncFunction("setQueue") { (tracks: [TrackRecord], startIndex: Int?) in
       try self.requireEngine().setQueue(tracks.map(\.asTrack), startIndex: startIndex ?? 0)
       self.sendEvent("onQueueChange", [:])
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("append") { (tracks: [TrackRecord]) in
       try self.requireEngine().queue.append(tracks.map(\.asTrack))
       self.sendEvent("onQueueChange", [:])
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("getActiveIndex") { () -> Int in
       self.engine?.queue.activeIndex ?? 0
-    }
+    }.runOnQueue(.main)
 
     // Queue editing. Declared in `src/AudioEngine.ts` since the beginning and
     // implemented by nothing until now, which is what was standing between the
@@ -180,36 +187,36 @@ public final class YuzicEngineModule: Module {
     AsyncFunction("insertAt") { (index: Int, tracks: [TrackRecord]) in
       try self.requireEngine().queue.insert(tracks.map(\.asTrack), at: index)
       self.sendEvent("onQueueChange", [:])
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("removeAt") { (index: Int) in
       try self.requireEngine().queue.remove(at: index)
       self.sendEvent("onQueueChange", [:])
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("move") { (fromIndex: Int, toIndex: Int) in
       try self.requireEngine().queue.move(from: fromIndex, to: toIndex)
       self.sendEvent("onQueueChange", [:])
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("clearQueue") {
       try self.requireEngine().queue.clear()
       self.sendEvent("onQueueChange", [:])
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("getQueue") { () -> [[String: Any]] in
       (self.engine?.queue.tracks ?? []).map(\.asRecordDictionary)
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("setRepeatMode") { (mode: String) in
       try self.requireEngine().queue.repeatMode = RepeatMode(rawValue: mode) ?? .off
-    }
+    }.runOnQueue(.main)
 
     // MARK: transport
 
     AsyncFunction("getState") { () -> String in
       self.engine?.state.rawValue ?? PlaybackEngine.PlaybackState.idle.rawValue
-    }
+    }.runOnQueue(.main)
 
     /**
      Asked rather than waited for.
@@ -224,26 +231,26 @@ public final class YuzicEngineModule: Module {
         "durationSec": progress.durationSec,
         "bufferedSec": progress.bufferedSec,
       ]
-    }
+    }.runOnQueue(.main)
 
-    AsyncFunction("play") { try self.requireEngine().play() }
-    AsyncFunction("pause") { try self.requireEngine().pause() }
-    AsyncFunction("stop") { try self.requireEngine().stop() }
-    AsyncFunction("seekTo") { (positionSec: Double) in try self.requireEngine().seek(toSeconds: positionSec) }
-    AsyncFunction("skipToNext") { try self.requireEngine().skipToNext() }
-    AsyncFunction("skipToPrevious") { try self.requireEngine().skipToPrevious() }
-    AsyncFunction("skipToIndex") { (index: Int) in try self.requireEngine().skipTo(index: index) }
+    AsyncFunction("play") { try self.requireEngine().play() }.runOnQueue(.main)
+    AsyncFunction("pause") { try self.requireEngine().pause() }.runOnQueue(.main)
+    AsyncFunction("stop") { try self.requireEngine().stop() }.runOnQueue(.main)
+    AsyncFunction("seekTo") { (positionSec: Double) in try self.requireEngine().seek(toSeconds: positionSec) }.runOnQueue(.main)
+    AsyncFunction("skipToNext") { try self.requireEngine().skipToNext() }.runOnQueue(.main)
+    AsyncFunction("skipToPrevious") { try self.requireEngine().skipToPrevious() }.runOnQueue(.main)
+    AsyncFunction("skipToIndex") { (index: Int) in try self.requireEngine().skipTo(index: index) }.runOnQueue(.main)
     AsyncFunction("setVolume") { (volume: Double) in
       // Through the engine, not onto the gain node. Writing `outputVolume`
       // here put user volume on the same node the crossfade ramps, so it was
       // discarded by the next fade and, after a skip taken mid-fade, wrote to
       // a voice nothing would touch again until the following track.
       try self.requireEngine().volume = Float(volume)
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("setSpeed") { (speed: Double) in
       self.graph?.setSpeed(Float(speed))
-    }
+    }.runOnQueue(.main)
 
     // MARK: cache
     //
@@ -335,8 +342,8 @@ public final class YuzicEngineModule: Module {
 
     // MARK: sleep timer
 
-    AsyncFunction("sleepAfter") { (seconds: Double) in self.sleepTimer?.schedule(after: seconds) }
-    AsyncFunction("cancelSleep") { self.sleepTimer?.cancel() }
+    AsyncFunction("sleepAfter") { (seconds: Double) in self.sleepTimer?.schedule(after: seconds) }.runOnQueue(.main)
+    AsyncFunction("cancelSleep") { self.sleepTimer?.cancel() }.runOnQueue(.main)
 
     // MARK: the reasons this exists
 
@@ -344,7 +351,7 @@ public final class YuzicEngineModule: Module {
       self.graph?.setEqualizer(bands: bands.map {
         (frequency: Float($0.frequencyHz), gainDb: Float($0.gainDb), q: Float($0.q ?? 1.0))
       })
-    }
+    }.runOnQueue(.main)
 
     /**
      Loudness normalisation, from the host's tags.
@@ -355,11 +362,11 @@ public final class YuzicEngineModule: Module {
      */
     AsyncFunction("setReplayGain") { (options: ReplayGainRecord) in
       try self.requireEngine().replayGain = options.asSettings
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("setCrossfade") { (options: CrossfadeRecord?) in
       try self.requireEngine().queue.crossfade = options?.asSettings
-    }
+    }.runOnQueue(.main)
 
     /**
      Hand the car its browse tree.
@@ -403,7 +410,7 @@ public final class YuzicEngineModule: Module {
       // control the host never asked for is how a car ends up with a button
       // that does nothing.
       try self.requireEngine().remoteCommands = commands.compactMap { RemoteCommand(rawValue: $0) }
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("clearBrowseTree") {
       CarPlayCoordinator.shared.setRoot(nil)
@@ -426,7 +433,7 @@ public final class YuzicEngineModule: Module {
         ])
       }
       engine.queue.sampleRateMode = resolved
-    }
+    }.runOnQueue(.main)
   }
 
   /**

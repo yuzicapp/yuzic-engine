@@ -179,10 +179,15 @@ final class TruncatedStreamTests: XCTestCase {
     try play(engine, upTo: 8, first: song("a"))
 
     engine.finishActiveTrackForTesting()
-    settle { engine.queue.activeIndex == 1 }
+    // The queue moves at once and the next track opens off the main thread —
+    // or was already opened by the preload — so wait for the handover itself
+    // rather than for the index, which is set before any open has run.
+    settle { engine.queue.activeIndex == 1 && engine.activePlaybackIsWiredForTesting && engine.state != .buffering }
 
     XCTAssertEqual(engine.queue.activeIndex, 1, "a ranged track's ending was disbelieved")
-    XCTAssertEqual(factory.offsetsAsked.count, 2, "a ranged track was reconnected")
+    // A reconnection is a request for the track from an offset. Counting opens
+    // instead depended on whether the preload had landed yet.
+    XCTAssertEqual(factory.offsetsAsked.filter { $0 > 0 }, [], "a ranged track was reconnected")
   }
 
   /**

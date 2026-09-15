@@ -33,6 +33,22 @@ behaviour does not.
   opening and then stopped at what had arrived. Stations reconnect after a
   dropped connection, and a paused station stops buffering. MP3 and ADTS AAC;
   Ogg stations take the existing path. See docs/architecture.md §10.
+- **iOS broke after another app took the audio.** An interruption — a call,
+  Siri, an alarm, or an app holding a non-mixable session such as a remote
+  desktop or a video — stops the audio engine and discards its buffers.
+  `play()` afterwards resumed a player node on that stopped engine, which
+  raises rather than failing, and only an interruption ending with
+  `.shouldResume` re-activated the session. A route or format change during an
+  interruption tried to start the engine into the inactive session, dropped
+  the playback and reported a failure, so the next play restarted the song and
+  re-opened its stream. Now every path that starts audio (play from the app,
+  lock screen, AirPods or car; seek; skip; the automatic advance) reclaims the
+  session and graph first, and a torn-down track is rebuilt at its position
+  over the same reader, with no re-open and no repeated track change. If
+  another app still holds the audio, the engine stays paused with the position
+  kept, rather than reporting a playback failure. The module's transport and
+  queue functions now run on the main queue, where the engine's notification
+  handlers already run.
 
 ## [1.0.10]
 
