@@ -444,6 +444,43 @@ The alternative — always source the cache from `/rest/download`, which is the
 raw file and seekable — trades a user's deliberate bandwidth choice for
 seekability, and on cellular that is not ours to make.
 
+### Live streams are a third transport
+
+Internet radio has neither a length nor an end, and both transports above lean
+on at least one. Measured against a real station (a 302 chain to a chunked
+`audio/mpeg` that ignores `Range`):
+
+- **The length probe never returned.** It waited for the whole response body,
+  which from a server that ignores `Range` is everything — here, a broadcast.
+  It ran into its wall-clock deadline and threw, so no station opened at all.
+  It now reads the status and headers and abandons the body, which also stops
+  it downloading an entire transcode just to learn there is no length.
+- **The file parser waits for an end.** Over `StreamingByteSource`,
+  `AudioFileOpenWithCallbacks` read the last 128 bytes of the guessed size
+  (an ID3v1 check) and waited out a full read timeout, then scanned packets to
+  the write head and waited out another: 24 seconds to open. The frame count it
+  settled on was what had arrived by then, and `read` stops there, so the
+  station ended itself shortly after it started.
+- **Every byte was kept**, which a transcode needs for backward seeks and a
+  broadcast never uses: 58MB an hour at 128 kbps.
+
+So a track the host marks `continuous` is read by `LiveStreamReader`, over
+`AudioFileStream` — Core Audio's push parser, which is handed bytes in order
+and yields packets as they complete — and `AudioConverter`. Bytes are dropped
+once parsed. It covers MP3 and ADTS AAC, which is nearly every Icecast and
+Shoutcast station; Ogg is handed back to the file path and its own decoders.
+
+Two behaviours are deliberate. A connection whose bytes go unread past a cap —
+a paused station — is dropped and reopened on the next read, so resuming
+plays the station as it is now, and a paused station costs no bandwidth. And a
+dropped connection is reopened by the reader itself: `reconnectStream` skips
+continuous tracks because a `timeOffset` into a broadcast means nothing, and
+for a station the same URL again is the whole recovery.
+
+**The host has to say so.** Nothing in the bytes or the headers distinguishes a
+station from a transcode reliably, so `continuous` is the host's statement. A
+station the host does not mark goes down the file path and fails as above.
+
 ## 11. The car is served natively, from a tree pushed down in advance
 
 CarPlay asks for its list at the worst possible moment. The phone connects as

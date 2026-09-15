@@ -104,6 +104,8 @@ final class TruncatedStreamTests: XCTestCase {
   ) throws {
     engine.setQueue([first, song("b")], startIndex: 0)
     try engine.play()
+    // A seek needs a reader, and the track's opens off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
     try engine.seek(toSeconds: seconds)
   }
 

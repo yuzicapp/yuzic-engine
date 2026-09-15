@@ -85,7 +85,7 @@ public final class HTTPByteFetcher: ByteFetcher, @unchecked Sendable {
     for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
     request.setValue("bytes=0-0", forHTTPHeaderField: "Range")
 
-    let (_, response) = try perform(request)
+    let response = try performHeaders(request)
 
     if response.statusCode == 206, let total = Self.totalFromContentRange(response) {
       rangesSupported = true
@@ -217,6 +217,84 @@ public final class HTTPByteFetcher: ByteFetcher, @unchecked Sendable {
     case .success(let pair): return pair
     case .failure(let error): throw error
     case nil: throw HTTPFetchError.transport("no result")
+    }
+  }
+
+  /**
+   Send a request and return as soon as its headers arrive, abandoning the body.
+
+   The length probe used to wait for the whole response. From a server that
+   honours `Range` that is one byte, and it cost nothing. From one that ignores
+   it the body is everything: a whole transcode, fetched only to learn there is
+   no length and then requested a second time by the streaming transport — or,
+   from an internet radio station, a broadcast that never ends. That probe ran
+   into the wall-clock deadline below and threw, so no station could be opened
+   at all. Everything the probe reads is in the status line and the headers.
+
+   Same cancellation and deadline rules as `perform`.
+   */
+  private func performHeaders(_ request: URLRequest) throws -> HTTPURLResponse {
+    let probe = HeaderProbe()
+    let task = session.dataTask(with: request)
+    // A task delegate rather than a session one, so the shared session and the
+    // client-certificate session both work unchanged: anything the probe does
+    // not implement — the certificate challenge included — still goes to the
+    // session's own delegate.
+    task.delegate = probe
+
+    state.lock()
+    if cancelled { state.unlock(); throw ByteSourceError.cancelled }
+    inFlight = task
+    state.unlock()
+
+    task.resume()
+    let answered = probe.done.wait(timeout: .now() + timeout * 2) == .success
+
+    state.lock()
+    if inFlight === task { inFlight = nil }
+    state.unlock()
+
+    guard answered else {
+      task.cancel()
+      throw HTTPFetchError.transport("request exceeded \(timeout * 2)s wall clock")
+    }
+    let (response, error) = probe.outcome
+    if let response { return response }
+    if let error, Self.isCancellation(error) { throw ByteSourceError.cancelled }
+    throw HTTPFetchError.transport(error.map { String(describing: $0) } ?? "no response")
+  }
+
+  /// Takes the response, refuses the body, and says when either has happened.
+  private final class HeaderProbe: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    let done = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var response: HTTPURLResponse?
+    private var error: Error?
+
+    var outcome: (HTTPURLResponse?, Error?) {
+      lock.lock(); defer { lock.unlock() }
+      return (response, error)
+    }
+
+    func urlSession(
+      _ session: URLSession,
+      dataTask: URLSessionDataTask,
+      didReceive response: URLResponse,
+      completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+      lock.lock()
+      self.response = response as? HTTPURLResponse
+      lock.unlock()
+      completionHandler(.cancel)
+      done.signal()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+      lock.lock()
+      let answered = response != nil
+      if !answered { self.error = error }
+      lock.unlock()
+      if !answered { done.signal() }
     }
   }
 

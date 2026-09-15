@@ -97,6 +97,8 @@ final class StreamReconnectTests: XCTestCase {
   private func playAndSeek(_ engine: PlaybackEngine, toSeconds seconds: Double) throws {
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    // A seek needs a reader, and the track's opens off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
     try engine.seek(toSeconds: seconds)
   }
 

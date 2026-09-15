@@ -259,11 +259,179 @@ final class PlaybackEngineTests: XCTestCase {
     _ = fetching.wait(timeout: .now() + 3)
     engine.finishActiveTrackForTesting()
 
-    settle { advancedTo == 1 }
+    // Two opens of "b" wait on the fixture now: the abandoned fade's, and the
+    // advance's own, which no longer runs inline. Let both through.
     release.signal()
+    release.signal()
+    settle { advancedTo == 1 }
 
     XCTAssertEqual(advancedTo, 1,
                    "the queue must advance rather than wait on a fade that never started")
+  }
+
+  /**
+   A track reaching its end does not open the next one on the main thread.
+
+   The automatic advance is the most travelled transition in the engine, and
+   it was the one still opening inline: `handleTrackFinished` runs on main and
+   called `beginTrack` with no reader, so `makeReader` and `open()` — a
+   content-length probe and a header parse, each a network round trip — ran on
+   the thread that drives the ticker, the lock screen, the car and every bridge
+   event. Reported as the app freezing hard at the end of songs.
+
+   The factory blocks the way a slow link does. If the open were inline, the
+   runloop turn that delivers the end of track would be stuck inside it and
+   `settle` could not come back until the fixture's own ten-second bound.
+   */
+  func testATrackEndingDoesNotOpenTheNextOneOnTheMainThread() throws {
+    let (engine, factory, graph) = try makeEngine()
+    engine.setQueue([song("a"), song("b")], startIndex: 0)
+    try engine.play()
+    settle(timeout: 5) { engine.isNextPreloaded }
+    // The path without a preload: a link too slow to have fetched ahead.
+    engine.discardPreloadForTesting()
+
+    let opening = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    factory.onMakeReader = { id in
+      guard id == "b" else { return }
+      opening.signal()
+      _ = release.wait(timeout: .now() + 10)
+    }
+
+    var advancedTo: Int?
+    engine.onEvent = { if case .trackChanged(let index, _, _) = $0 { advancedTo = index } }
+
+    engine.finishActiveTrackForTesting()
+    // Queued behind the end-of-track delivery. If the advance opened inline,
+    // the turn that runs it would sit in the fixture for its ten-second bound
+    // and this marker could not run until then.
+    var turned = false
+    DispatchQueue.main.async { turned = true }
+    let started = Date()
+    settle { turned && engine.state == .buffering }
+    let mainWasHeldFor = Date().timeIntervalSince(started)
+
+    XCTAssertEqual(opening.wait(timeout: .now() + 3), .success, "the next track was never opened")
+    XCTAssertTrue(turned)
+    XCTAssertLessThan(mainWasHeldFor, 2,
+                      "the main thread was held for the length of the next track's open")
+    XCTAssertNil(advancedTo, "precondition: the open is still outstanding")
+
+    release.signal()
+    settle { advancedTo == 1 && graph.activeVoice.gain.outputVolume == 1 }
+    XCTAssertEqual(advancedTo, 1, "the queue advances once the track has opened")
+    XCTAssertEqual(engine.queue.activeIndex, 1)
+  }
+
+  /// And a natural end uses the reader the preload already opened, the same way
+  /// a skip does, rather than fetching the track a second time.
+  func testATrackEndingUsesThePreloadedReader() throws {
+    let (engine, factory, graph) = try makeEngine()
+    engine.setQueue([song("a"), song("b")], startIndex: 0)
+    try engine.play()
+    settle(timeout: 5) { engine.isNextPreloaded }
+    XCTAssertTrue(engine.isNextPreloaded, "precondition: the next track is ready")
+
+    var openedAfterEnd: [MediaId] = []
+    factory.onMakeReader = { openedAfterEnd.append($0) }
+
+    engine.finishActiveTrackForTesting()
+    settle { engine.queue.activeIndex == 1 && graph.activeVoice.gain.outputVolume == 1 }
+
+    XCTAssertEqual(engine.queue.activeIndex, 1)
+    XCTAssertFalse(openedAfterEnd.contains("b"),
+                   "the advance refetched a track the preload had already opened")
+  }
+
+  /**
+   `play()` on a queue with nothing loaded returns before the reader is open.
+
+   A car selection calls it on the main thread, so opening inline froze the car
+   and the phone together for the length of the fetch.
+   */
+  func testPlayingAFreshQueueDoesNotOpenOnTheCallingThread() throws {
+    let (engine, factory, graph) = try makeEngine()
+    engine.setQueue([song("a")], startIndex: 0)
+    let release = DispatchSemaphore(value: 0)
+    factory.onMakeReader = { _ in _ = release.wait(timeout: .now() + 10) }
+
+    let started = Date()
+    try engine.play()
+    let returnedAfter = Date().timeIntervalSince(started)
+    release.signal()
+
+    XCTAssertLessThan(returnedAfter, 1, "play() waited for the reader to open")
+    settle { graph.activeVoice.gain.outputVolume == 1 && engine.activePlaybackIsWiredForTesting }
+    XCTAssertTrue(engine.activePlaybackIsWiredForTesting, "the track starts once it has opened")
+  }
+
+  /// And a pause pressed while it opens is kept, rather than the track starting
+  /// anyway once the network answers.
+  func testAPauseWhileAFreshQueueOpensIsKept() throws {
+    let (engine, factory, _) = try makeEngine()
+    engine.setQueue([song("a")], startIndex: 0)
+    let release = DispatchSemaphore(value: 0)
+    factory.onMakeReader = { _ in _ = release.wait(timeout: .now() + 10) }
+
+    try engine.play()
+    engine.pause()
+    release.signal()
+
+    settle { engine.activePlaybackIsWiredForTesting }
+    XCTAssertTrue(engine.activePlaybackIsWiredForTesting, "the track is still loaded")
+    XCTAssertEqual(engine.state, .paused)
+  }
+
+  /// A queue replaced while its first track opens does not start that track.
+  func testReplacingTheQueueAbandonsAnOpenInFlight() throws {
+    let (engine, factory, _) = try makeEngine()
+    engine.setQueue([song("a")], startIndex: 0)
+    let release = DispatchSemaphore(value: 0)
+    factory.onMakeReader = { id in if id == "a" { _ = release.wait(timeout: .now() + 10) } }
+
+    try engine.play()
+    engine.setQueue([song("b")], startIndex: 0)
+    release.signal()
+
+    let deadline = Date().addingTimeInterval(0.5)
+    while Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+    XCTAssertEqual(engine.state, .idle, "a track from the replaced queue started")
+    XCTAssertFalse(engine.activePlaybackIsWiredForTesting)
+  }
+
+  /**
+   A skip inside the fade window goes to the track asked for.
+
+   The ticker kept running over the cut track while the skip's reader opened,
+   read its last position against the queue's new next track, and — with a
+   crossfade set — began a fade into the track after the one asked for. That
+   fade's open superseded the skip's, so the skip never landed.
+   */
+  func testASkipNearTheEndDoesNotFadeIntoTheTrackAfterIt() throws {
+    let (engine, factory, graph) = try makeEngine()
+    engine.setQueue([song("a"), song("b"), song("c")], startIndex: 0)
+    try engine.play()
+    settle { engine.state == .playing }
+
+    // No runloop turns between these, so no tick lands before the skip.
+    try engine.seek(toSeconds: 2.5)
+    engine.queue.crossfade = CrossfadeSettings(durationSec: 1, mode: .always)
+    engine.discardPreloadForTesting()
+
+    let release = DispatchSemaphore(value: 0)
+    factory.onMakeReader = { id in if id == "b" { _ = release.wait(timeout: .now() + 2) } }
+    try engine.skipToNext()
+
+    // Several ticks while the skip's open is outstanding.
+    let deadline = Date().addingTimeInterval(0.8)
+    while Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+    release.signal()
+    settle { graph.activeVoice.gain.outputVolume == 1 && engine.activePlaybackIsWiredForTesting }
+    let settleMore = Date().addingTimeInterval(1)
+    while Date() < settleMore { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+
+    XCTAssertEqual(engine.queue.activeIndex, 1, "the skip was overtaken by a fade into the track after it")
   }
 
   // MARK: - Volume, and the node it is allowed to touch
@@ -484,6 +652,7 @@ final class PlaybackEngineTests: XCTestCase {
     let (engine, _, graph) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
 
     // What the sleep timer leaves behind.
     graph.cut(graph.activeVoice, to: 0)
@@ -517,6 +686,7 @@ final class PlaybackEngineTests: XCTestCase {
 
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
 
     XCTAssertEqual(
       graph.activeVoice.player.outputFormat(forBus: 0).sampleRate, 44_100,
@@ -560,8 +730,11 @@ final class PlaybackEngineTests: XCTestCase {
     let (engine, factory, _) = try makeEngine()
     engine.setQueue([song("a"), song("b"), song("c")], startIndex: 1)
     try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
 
-    XCTAssertEqual(factory.opened, ["b"])
+    // First, not only: once "b" plays, the preload may fetch "c" behind it.
+    XCTAssertEqual(factory.opened.first, "b")
+    XCTAssertFalse(factory.opened.contains("a"))
   }
 
   /**
@@ -680,6 +853,7 @@ final class PlaybackEngineTests: XCTestCase {
                   "the fixture did not leave a stopped playback behind")
 
     try engine.play()
+    settle { !engine.activePlaybackIsFinishedForTesting }
 
     XCTAssertFalse(engine.activePlaybackIsFinishedForTesting,
                    "play resumed the dead playback instead of starting a live one")
@@ -861,10 +1035,15 @@ final class PlaybackEngineTests: XCTestCase {
     let (engine, factory, _) = try makeEngine()
     engine.setQueue([song("a"), song("b")], startIndex: 0)
     try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
     try engine.skipToPrevious()
 
-    // Not an error, and not a wrap-around to the end of the queue.
-    XCTAssertEqual(factory.opened, ["a"])
+    // Not an error, and not a wrap-around to the end of the queue — which
+    // would open "b" as the *active* track, first after "a". The preload may
+    // fetch "b" as next, so what is asserted is that "a" was not reopened and
+    // nothing moved.
+    XCTAssertEqual(factory.opened.first, "a")
+    XCTAssertEqual(factory.opened.filter { $0 == "a" }.count, 1)
     XCTAssertEqual(engine.queue.activeIndex, 0)
   }
 
@@ -878,6 +1057,7 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
     Thread.sleep(forTimeInterval: 0.2)
     try engine.skipToNext()
 
@@ -917,6 +1097,9 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     try engine.play()
+    // The listening clock starts when the track does, which is once its reader
+    // has opened — not when play was asked for.
+    settle { engine.activePlaybackIsWiredForTesting }
     clock.addTimeInterval(30)      // listened
     engine.pause()
     clock.addTimeInterval(3600)    // did not listen
@@ -944,6 +1127,7 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
     clock.addTimeInterval(20)
     engine.pause()
     clock.addTimeInterval(5)
@@ -957,6 +1141,7 @@ final class PlaybackEngineTests: XCTestCase {
     let (engine, factory, _) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
     engine.pause()
     XCTAssertEqual(engine.state, .paused)
     try engine.play()

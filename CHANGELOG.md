@@ -11,6 +11,29 @@ behaviour does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **iOS froze at the end of songs.** The automatic advance opened the next
+  track's reader inline on the main thread — a length probe and a header
+  parse, each a network round trip — so the interface, the lock screen, the
+  car and every event to the host stalled for the length of the fetch. It also
+  ignored the reader the preload had already opened. The advance, and `play()`
+  on a queue with nothing loaded (which a CarPlay selection calls on the main
+  thread), now open off it and use the preload when it matches. A pause
+  pressed while a track opens is kept, and a queue replaced mid-open no longer
+  starts the old track.
+- **iOS: a skip inside the crossfade window could land on the wrong track.**
+  The ticker kept running over the cut track while the skip opened, and began
+  a fade into the track after the one asked for, superseding the skip.
+- **iOS: internet radio did not play.** The length probe waited for the whole
+  response body, which from a station never ends; it now returns on the
+  headers, which also stops it downloading a whole transcode to learn there is
+  no length. Tracks marked `continuous` are read by a new stream parser
+  instead of the file parser, which waited for the end of the broadcast before
+  opening and then stopped at what had arrived. Stations reconnect after a
+  dropped connection, and a paused station stops buffering. MP3 and ADTS AAC;
+  Ogg stations take the existing path. See docs/architecture.md §10.
+
 ## [1.0.10]
 
 ### Fixed

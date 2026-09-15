@@ -687,12 +687,12 @@ public final class PlaybackEngine {
      than at the top of the track.
      */
     if let playback = activePlayback, playback.isFinished {
-      try beginTrack(at: queue.activeIndex, fromFrame: playback.currentFrame)
+      startTrack(at: queue.activeIndex, fromFrame: playback.currentFrame)
       return
     }
 
     if activePlayback == nil {
-      try beginTrack(at: queue.activeIndex, fromFrame: 0)
+      startTrack(at: queue.activeIndex, fromFrame: 0)
     } else {
       // Restore the voice, because something may have faded it away while it
       // was paused. The sleep timer does exactly that: it fades to silence and
@@ -1084,6 +1084,12 @@ public final class PlaybackEngine {
     }
     let listened = listenedSeconds()
     cancelTransition()
+    // Quiet until the new track begins, which starts it again. Left running,
+    // the ticker reads the cut track's last position against the queue's *new*
+    // next track: a skip taken inside the fade window, with a crossfade set,
+    // began a fade into the track after the one asked for, and that fade's
+    // open superseded the skip's own.
+    stopTicking()
     let track = queue.tracks[index]
 
     // The queue moves now, not when the network answers. The lock screen, the
@@ -1150,26 +1156,90 @@ public final class PlaybackEngine {
     }
   }
 
-  private func beginTrack(at index: Int, fromFrame frame: Int64,
-                          previousListenedSec: Double? = nil,
-                          prepared: TrackReader? = nil,
-                          announced: Bool = false) throws {
-    guard let track = queue.tracks.indices.contains(index) ? queue.tracks[index] : nil else {
+  /**
+   Start the track at `index` from `frame`, with its reader opened off the
+   calling thread.
+
+   The automatic advance and `play()` on a queue with nothing loaded used to
+   call `beginTrack` with no reader, and `beginTrack` opened one inline: a
+   content-length probe and a header parse, each a network round trip, on
+   whichever thread asked. For the advance that is the main thread — the
+   ticker, the lock screen, the car and every event to the host wait behind it
+   — and for a car selection it is the main thread too. Reported as the app
+   freezing hard at the end of songs. Skips and crossfades had already been
+   moved off it; these two had not.
+
+   The preloaded reader is used when it is for this track, so the ordinary
+   advance opens nothing at all — which is also what makes it gapless.
+   */
+  private func startTrack(at index: Int, fromFrame frame: Int64,
+                          previousListenedSec: Double? = nil) {
+    guard queue.tracks.indices.contains(index) else {
       finish()
       return
     }
+    let track = queue.tracks[index]
+    state = .buffering
+    // The outgoing playback is finished or absent. A ticker left running over
+    // it reads its final position against the queue's new next track, which
+    // with a crossfade set begins a fade past the track being opened.
+    // `beginTrack` starts the ticker again.
+    stopTicking()
+
+    if frame == 0, let prepared = preparedNext, prepared.id == track.id {
+      preparedNext = nil
+      begin(track, at: index, fromFrame: frame,
+            previousListenedSec: previousListenedSec, reader: prepared.reader)
+      return
+    }
+
+    openReader(for: track) { [weak self] result in
+      guard let self else { return }
+      switch result {
+      case .failure(let error):
+        // Say so rather than sitting in `.buffering`, a spinner that never
+        // resolves — the automatic advance once swallowed exactly this.
+        self.state = .paused
+        self.publishNowPlaying()
+        self.emit(.failed("Could not open \(track.title): \(error)"))
+      case .success(let reader):
+        self.begin(track, at: index, fromFrame: frame,
+                   previousListenedSec: previousListenedSec, reader: reader)
+      }
+    }
+  }
+
+  private func begin(_ track: Track, at index: Int, fromFrame frame: Int64,
+                     previousListenedSec: Double?, reader: TrackReader) {
+    // Paused while the reader was opening. Now that opening is not instant
+    // there is a window to press pause in, and starting the audio anyway
+    // would ignore the press. Loaded and held, so play resumes it.
+    let holdPaused = state == .paused
+    do {
+      try beginTrack(at: index, fromFrame: frame,
+                     previousListenedSec: previousListenedSec, prepared: reader)
+      if holdPaused { pause() }
+    } catch {
+      state = .paused
+      publishNowPlaying()
+      emit(.failed("Could not play \(track.title): \(error)"))
+    }
+  }
+
+  private func beginTrack(at index: Int, fromFrame frame: Int64,
+                          previousListenedSec: Double? = nil,
+                          prepared reader: TrackReader,
+                          announced: Bool = false) throws {
+    guard queue.tracks.indices.contains(index) else {
+      finish()
+      return
+    }
+    let track = queue.tracks[index]
 
     state = .buffering
-    // `prepared` is a reader the caller already opened, which is how a skip
-    // avoids a silent gap — see `move`. Opening here is the path for callers
-    // that have nothing playing to protect.
-    let reader: TrackReader
-    if let prepared {
-      reader = prepared
-    } else {
-      reader = try factory.makeReader(for: track)
-      try reader.open()
-    }
+    // Always handed a reader that is already open. This used to open one
+    // itself when given none, on whatever thread called — see `startTrack` for
+    // what that cost.
 
     // This path starts the track on the *active* voice, so that is the one that
     // has to match the file's rate — reconnecting the idle voice here would
@@ -1268,18 +1338,11 @@ public final class PlaybackEngine {
       // starts again, `.all` wraps at the end instead of finishing.
       guard let next = self.queue.nextIndex else { self.finish(); return }
       self.queue.set(self.queue.tracks, startIndex: next)
-      do {
-        try self.beginTrack(at: next, fromFrame: 0, previousListenedSec: listened)
-      } catch {
-        // `beginTrack` sets `.buffering` and *then* opens the reader, so a
-        // discarded throw here left a spinner that never resolves and no
-        // error anywhere. This is the automatic advance — the most travelled
-        // transition in the engine — and it was the one path that swallowed.
-        let title = self.queue.activeTrack?.title ?? "the next track"
-        self.state = .paused
-        self.publishNowPlaying()
-        self.emit(.failed("Could not open \(title): \(error)"))
-      }
+      // The most travelled transition in the engine, and the last one that
+      // opened its reader inline on the main thread. `startTrack` opens off
+      // it, takes the preload when there is one, and reports a failed open
+      // rather than leaving a spinner.
+      self.startTrack(at: next, fromFrame: 0, previousListenedSec: listened)
     }
   }
 
@@ -1660,6 +1723,10 @@ public final class PlaybackEngine {
   }
 
   private func stopEverything() {
+    // An open still in flight belongs to what is being stopped. Without this a
+    // `setQueue` or `stop` arriving while a track was opening was followed by
+    // that track starting anyway, into a queue that no longer holds it.
+    openToken &+= 1
     cancelTransition()
     activePlayback?.stop()
     activePlayback = nil

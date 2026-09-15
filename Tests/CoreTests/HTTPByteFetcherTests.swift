@@ -207,6 +207,53 @@ final class HTTPByteFetcherTests: XCTestCase {
   }
 }
 
+extension HTTPByteFetcherTests {
+  /**
+   A server that ignores `Range` and never finishes is answered from its headers.
+
+   The probe used to wait for the whole body. From an internet radio station
+   the body never ends, so it ran into the wall-clock deadline and threw — and
+   no station could be opened. From a transcoding server it downloaded the
+   whole transcode just to learn there was no length.
+   */
+  func testTheLengthProbeDoesNotWaitForAnEndlessBody() {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [EndlessBodyURLProtocol.self]
+    let fetcher = HTTPByteFetcher(
+      url: URL(string: "https://radio.test/lofi")!,
+      session: URLSession(configuration: config),
+      timeout: 5
+    )
+
+    let started = Date()
+    XCTAssertThrowsError(try fetcher.contentLength()) { error in
+      guard case HTTPByteFetcher.HTTPFetchError.noLength = error else {
+        return XCTFail("expected noLength, got \(error)")
+      }
+    }
+    XCTAssertLessThan(Date().timeIntervalSince(started), 2,
+                      "the probe waited for a body it does not need")
+    XCTAssertEqual(fetcher.rangesSupported, false)
+  }
+}
+
+/// A 200 with no length whose body keeps coming — an internet radio station.
+final class EndlessBodyURLProtocol: URLProtocol {
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func stopLoading() {}
+
+  override func startLoading() {
+    let response = HTTPURLResponse(
+      url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+      headerFields: ["Content-Type": "audio/mpeg"]
+    )!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(count: 4096))
+    // Deliberately never finished.
+  }
+}
+
 /// Answers with headers and then never finishes, the way a connection that has
 /// gone away looks from this side.
 final class StallingURLProtocol: URLProtocol {

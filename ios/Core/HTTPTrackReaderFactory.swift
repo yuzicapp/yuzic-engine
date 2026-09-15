@@ -118,6 +118,25 @@ public final class HTTPTrackReaderFactory: TrackReaderFactory {
   }
 
   public func makeReader(for track: Track, timeOffsetSeconds: Int) throws -> TrackReader {
+    // A broadcast is a third transport: no length, no ranges, no end. The file
+    // parsers below wait for a size that does not exist — see
+    // `LiveStreamReader`. Ogg stations are the exception it hands back, and
+    // they take the path below as before.
+    if track.continuous, let url = URL(string: track.uri), !url.isFileURL {
+      let certificate = transport.certificate
+      let reader = LiveStreamReader(hint: Self.typeHint(for: track.uri)) {
+        HTTPStreamProducer(url: url, headers: track.headers, clientCertificate: certificate)
+      }
+      do {
+        try reader.open()
+        return reader
+      } catch LiveStreamReader.LiveStreamError.notParseable {
+        // Fall through to the file path.
+      } catch LiveStreamReader.LiveStreamError.noFormat {
+        // Fall through: the file path reports the status that explains it.
+      }
+    }
+
     let source = try makeSource(for: track, timeOffsetSeconds: timeOffsetSeconds)
 
     // Sniffed from the bytes, not from the URI. A stream URL carries no

@@ -87,6 +87,8 @@ final class MediaServicesResetTests: XCTestCase {
     let (engine, _) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    // The track starts once its reader has opened, off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
 
     var reconfigured = 0
     engine.reconfigureAudioSession = { reconfigured += 1 }
@@ -107,6 +109,8 @@ final class MediaServicesResetTests: XCTestCase {
     let (engine, _) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    // The track starts once its reader has opened, off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
 
     var failures: [String] = []
     engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
@@ -130,6 +134,8 @@ final class MediaServicesResetTests: XCTestCase {
     let (engine, factory) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    // The track starts once its reader has opened, off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
     try engine.seek(toSeconds: 12)
     let readersBefore = factory.readersMade
 
@@ -158,6 +164,8 @@ final class MediaServicesResetTests: XCTestCase {
     let (engine, _) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    // The track starts once its reader has opened, off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
     settle { engine.state == .playing || engine.state == .buffering }
 
     engine.reconfigureAudioSession = {}
@@ -177,12 +185,16 @@ final class MediaServicesResetTests: XCTestCase {
     let (engine, _) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)
     try engine.play()
+    // The track starts once its reader has opened, off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
 
     engine.reconfigureAudioSession = {}
     engine.recoverFromMediaServicesResetForTesting()
     settle { engine.state == .paused }
 
     try engine.play()
+    // The track starts once its reader has opened, off the main thread.
+    settle { engine.activePlaybackIsWiredForTesting }
     settle { engine.state == .playing || engine.state == .buffering }
 
     XCTAssertTrue(
