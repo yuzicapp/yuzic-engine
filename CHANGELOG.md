@@ -9,7 +9,7 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
-## [Unreleased]
+## [1.0.11]
 
 ### Fixed
 
@@ -325,7 +325,8 @@ point; 1.0.0 marks the API being committed to rather than the code being new.
   live one mid-track. `Tools/parity.py` declares it; every other method agrees
   across the two platforms by signature and event vocabulary.
 
-[Unreleased]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.11...HEAD
+[1.0.11]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.10...v1.0.11
 [1.0.2]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/yuzicapp/yuzic-engine/releases/tag/v1.0.0
