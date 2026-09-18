@@ -568,11 +568,14 @@ config plugin's Info.plist scene entry lands only on a prebuild.
 Not a design decision — a record. The serious defects here have kept arriving in
 the same shape, and it is worth naming because it is not the shape most review
 looks for. Nothing below threw. Nothing below failed a test suite. Seven of the
-ten are code that ran, returned, and accomplished nothing. Two are the same idea
-one level up: one where what accomplished nothing was the handover, one where it
-was the API boundary. The tenth is a step further out again — code that was
-correct, and a *test* that ran, passed, and proved nothing, because it exercised
-a different decoder from the one the fault lived in.
+eleven are code that ran, returned, and accomplished nothing. Two are the same
+idea one level up: one where what accomplished nothing was the handover, one
+where it was the API boundary. The tenth is a step further out again — code that
+was correct, and a *test* that ran, passed, and proved nothing, because it
+exercised a different decoder from the one the fault lived in. The eleventh is
+further out still, and is the only one that is not about code at all: a fault
+nothing was watching, because the path it took was the one where everything
+succeeded.
 
 **A guard that guards nothing.** `remoteCommandsEnabled` re-registered the lock
 screen's targets only when the value changed. Correct in isolation; the previous
@@ -710,6 +713,44 @@ WAV**. That is the entire point restated. **MP3 is the standing gap**: Core
 Audio decodes it and will not encode it, so no fixture can be built in process,
 and MP3 is what every transcoded stream is. Anyone who finds a way to get a
 small MP3 fixture into the suite should add it to the matrix.
+
+**A fault on the path where nothing goes wrong.** The eleventh, and the one
+left over after all the rest. Every fault above was eventually caught by asking
+what some piece of code *did*. This one had no code to ask about. A range
+request that is merely slow — anything up to `HTTPByteFetcher.defaultTimeout`,
+which is eight seconds — does not throw, does not time out and does not fail.
+It returns, late, with the bytes. So the retry ladder never ran, `onReadStalled`
+never fired, `reconnectStream` was never reached, and every instrument added in
+the course of fixing the ten above sat on paths that were not taken. Meanwhile
+`TrackPlayback`'s two seconds of scheduled PCM drained, the node rendered
+silence, the rendered position stopped advancing, and the engine went on
+reporting `.playing`. The account the engine gave of that minute was that it
+played normally, and the listener heard the music stop and come back.
+
+Reported, after everything else had been fixed, as "it's been better than
+before, but it still cuts out" — which is the description of a fault that has
+lost its neighbours and is now audible on its own.
+
+`onUnderrun` is the instrument: raised from the buffer completion that takes
+the scheduled depth to zero with the track neither finished nor stopped, which
+is the moment the node has nothing left to render. Counted and logged on every
+occurrence, because the count is the measurement; drawn as `.buffering` only
+once it outlasts `PlaybackEngine.underrunGraceSec`, because a depth that
+touches zero and is served again a few milliseconds later is a gap nobody heard
+and a spinner nobody should see. The two exclusions are the whole of the
+subtlety — the ordinary drain at the end of a track and the flush `stop()`
+fires reach zero legitimately, and a check written against the depth alone
+would report a dropout on every track anyone ever finished.
+
+**It does not fix the dropout, and is not meant to.** The cushion is two
+seconds of PCM at 44.1kHz (`targetBuffersAhead` × `bufferFrames`, and
+proportionally less at every higher rate, since the count is in source frames),
+with no read-ahead underneath it: `CachedByteSource` fetches a window only when
+the decoder asks for bytes it does not have. So the engine has to land a round
+trip roughly every two seconds of playback with two seconds of slack, which is
+fine at the 273ms measured against a real server and is not fine on a link
+having a bad minute. Deepening that is the next question, and it is a question
+worth having a number for first — which is what this is.
 
 The common thread is that all of these are invisible to "does it return, and is
 the return value right". What catches them is asking what the code *did* — which

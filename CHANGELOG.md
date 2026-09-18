@@ -9,6 +9,37 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Added
+
+- **iOS: the engine now says when it has run out of audio.** Every playback
+  fault handled so far threw something. A range request that is merely slow —
+  up to the eight-second read timeout — does not: it returns, late, having
+  succeeded. So the retry ladder never ran, `onReadStalled` never fired, and
+  nothing was counted or logged, while the two seconds of scheduled PCM
+  drained, the node rendered silence and the engine went on reporting
+  `playing`. That is the dropout still reported over the network after every
+  other fix, on WiFi as well as cellular.
+
+  `TrackPlayback` now raises an underrun from the buffer completion that takes
+  the scheduled depth to zero with the track neither finished nor stopped. The
+  engine counts and logs every one (`[yuzic-engine] audio underran …`, with the
+  position, the track and the running count, and the length of the gap when it
+  ends) and shows `buffering` for any that outlasts a quarter of a second —
+  short droughts that the decode thread serves immediately are real but
+  inaudible, and drawing them would flash a spinner over music that never
+  stopped. The ordinary drain at the end of a track and the flush a stop fires
+  both reach zero depth legitimately and are excluded.
+
+  **This measures the dropout; it does not fix it.** The cushion is two seconds
+  of PCM at 44.1kHz and proportionally less above it, with no read-ahead
+  beneath it, so the engine has to land a round trip every couple of seconds of
+  playback. Making that cushion bigger is the next change, and this is what
+  will say whether it worked. No JavaScript API change: the underrun surfaces
+  through the existing `buffering` state, so hosts need no update and the
+  platforms stay at parity.
+
 ## [1.0.11]
 
 ### Fixed

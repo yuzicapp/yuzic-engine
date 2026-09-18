@@ -122,6 +122,58 @@ public final class PlaybackEngine {
   public static let maxStreamReconnects = 3
 
   /**
+   How long the node may be out of audio before the listener is told.
+
+   An underrun is raised the instant the scheduled depth reaches zero, which
+   is the truth and is what gets counted and logged. It is not, on its own,
+   worth drawing: the decode thread refills from its own completion handler,
+   so a depth that touches zero and is served again a few milliseconds later
+   is a gap nobody heard, and announcing it would flash a spinner on and off
+   over music that never stopped.
+
+   A quarter of a second is past the point where a gap is audible as a gap
+   rather than as a glitch, and well inside the time a listener takes to
+   wonder what happened. A drought that ends before it elapses never reaches
+   the interface; one that does not is a dropout, and is drawn as buffering
+   for as long as it lasts.
+   */
+  public static let underrunGraceSec: TimeInterval = 0.25
+
+  /// Whether the node is out of audio right now, so the delayed announcement
+  /// below can tell a drought that is still going from one already over.
+  private var underrunning = false
+  /// Cancels a pending announcement: recovery bumps it, and the work item
+  /// that wakes up holding a stale one returns. Same device as `openToken`,
+  /// for the same reason — there is no timer to invalidate, only an intent
+  /// that may have been superseded.
+  private var underrunToken: UInt64 = 0
+  /// When the current drought began, for the length reported when it ends.
+  private var underrunSince: Date?
+  /// Whether reads are in the retry ladder, as the engine was last told.
+  /// Kept here rather than asked of the playback because it is the engine's
+  /// own record of a signal it received — and because the two reasons for
+  /// showing `.buffering` have to be told apart by whoever is clearing one.
+  private var readStalled = false
+  /// Underruns on the current track. Reset by `beginTrack`, logged on each
+  /// one, and the number worth reading out of a device log: a track that
+  /// underran forty times played, but not the way anyone would call playing.
+  private var underrunsThisTrack = 0
+
+  /**
+   Forget the drought in progress, without forgetting the count.
+
+   Called wherever the playback a drought belonged to is being replaced — a new
+   track, or a stream being picked back up. Bumping the token is the load-
+   bearing part: a pending announcement from the old playback would otherwise
+   wake up and draw `buffering` over whatever replaced it.
+   */
+  private func forgetUnderrun() {
+    underrunning = false
+    underrunSince = nil
+    underrunToken &+= 1
+  }
+
+  /**
    How far short of the track's real length an "end of file" may land before it
    is disbelieved.
 
@@ -997,7 +1049,14 @@ public final class PlaybackEngine {
      */
     playback.onReadStalled = { [weak self, weak playback] in
       DispatchQueue.main.async {
-        guard let self, self.activePlayback === playback, self.state == .playing else { return }
+        guard let self, self.activePlayback === playback else { return }
+        // Outside the state guard below, for the same reason the budget reset
+        // in `onReadResumed` is: reads being in the ladder is a fact about the
+        // connection rather than about what the interface happens to be
+        // showing. `onUnderrunEnded` asks it precisely in the case where the
+        // engine is already `.buffering` for the other reason.
+        self.readStalled = true
+        guard self.state == .playing else { return }
         self.state = .buffering
         self.publishNowPlaying()
       }
@@ -1011,11 +1070,76 @@ public final class PlaybackEngine {
         // whether the engine happened to be showing `buffering` at the moment
         // it ended.
         self.reconnectAttempts = 0
+        self.readStalled = false
         guard self.state == .buffering else { return }
         self.state = .playing
         self.publishNowPlaying()
       }
     }
+    /*
+     The other half of the stall pair, and the half that was missing.
+
+     `onReadStalled` speaks for a read that threw. Nothing spoke for a read
+     that was merely slow: the depth drained, the node went silent, the
+     rendered position stopped, and the engine carried on saying `.playing`
+     for as long as the fetch took — up to `HTTPByteFetcher.defaultTimeout`,
+     which is eight seconds, with no state change, no count and no line in
+     any log. The listener heard the music stop and come back; the engine's
+     account of that minute was that it played normally.
+
+     Counted and logged unconditionally, because the count is the instrument
+     and a dropout nobody drew is still a dropout that happened. Drawn only
+     if it outlasts `underrunGraceSec` — see there for why.
+     */
+    playback.onUnderrun = { [weak self, weak playback] in
+      DispatchQueue.main.async {
+        guard let self, self.activePlayback === playback else { return }
+        self.underrunning = true
+        self.underrunSince = self.now()
+        self.underrunsThisTrack += 1
+        let at = String(format: "%.1f", self.progress.positionSec)
+        let title = self.queue.activeTrack?.title ?? "unknown"
+        NSLog("[yuzic-engine] audio underran at \(at)s of \(title) — \(self.underrunsThisTrack) on this track")
+
+        guard self.state == .playing else { return }
+        self.underrunToken &+= 1
+        let token = self.underrunToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.underrunGraceSec) { [weak self] in
+          guard let self, self.underrunToken == token,
+                self.underrunning, self.state == .playing else { return }
+          self.state = .buffering
+          self.publishNowPlaying()
+        }
+      }
+    }
+    playback.onUnderrunEnded = { [weak self, weak playback] in
+      DispatchQueue.main.async {
+        // `underrunning` is in the guard, not just the body. `stopAndWait`
+        // lets a read already in flight finish, and that read schedules a
+        // buffer — so a playback being torn down can raise this after the
+        // engine has moved on. Without the check it would find `.buffering`
+        // put up by the reconnection that replaced it, conclude the drought
+        // was over and say `playing` over a track that is being re-opened.
+        guard let self, self.activePlayback === playback, self.underrunning else { return }
+        // Bumped whether or not anything was announced: this is what stops a
+        // pending announcement from landing on a drought that is already over.
+        self.underrunToken &+= 1
+        self.underrunning = false
+        if let since = self.underrunSince {
+          let gap = String(format: "%.2f", self.now().timeIntervalSince(since))
+          NSLog("[yuzic-engine] audio resumed after \(gap)s")
+          self.underrunSince = nil
+        }
+        // Only undo what an underrun drew. A `.buffering` that a *read* stall
+        // put up belongs to `onReadResumed`, and clearing it here would say
+        // the connection had recovered on the strength of one buffer that
+        // was decoded before it broke.
+        guard self.state == .buffering, !self.readStalled else { return }
+        self.state = .playing
+        self.publishNowPlaying()
+      }
+    }
+
     // A track that could not be read has *not* finished, and must not advance
     // the queue. `AudioFileReader.read` returns nil at the end and throws on
     // failure; treating both as the end is what made a dropped connection look
@@ -1078,6 +1202,9 @@ public final class PlaybackEngine {
     // remove.
     state = .buffering
     publishNowPlaying()
+    // The drought belonged to the playback about to be thrown away. Its count
+    // stays — it is the track's, and the track is the same one.
+    forgetUnderrun()
 
     activePlayback?.stopAndWait()
     openToken &+= 1
@@ -1417,7 +1544,12 @@ public final class PlaybackEngine {
 
     activeReader = reader
     // A new track is a new budget: reconnections spent on the last one say
-    // nothing about this one.
+    // nothing about this one. The underrun count goes with it — it is a
+    // per-track figure, and a pending announcement from the track being
+    // replaced must not land on this one.
+    underrunsThisTrack = 0
+    forgetUnderrun()
+    readStalled = false
     reconnectAttempts = 0
     let playback = TrackPlayback(reader: reader, voice: graph.activeVoice)
     wire(playback)
@@ -1582,11 +1714,22 @@ public final class PlaybackEngine {
   /// how the unwired crossfade path went unnoticed.
   var activePlaybackIsWiredForTesting: Bool {
     activePlayback?.onEndOfTrack != nil && activePlayback?.onReadFailed != nil
+      // Included for the reason the other two are: `wire` is the one place
+      // that attaches handlers precisely so a fourth site cannot omit one,
+      // and a check that does not name a handler cannot notice it missing.
+      && activePlayback?.onUnderrun != nil
   }
   var activePlaybackIsFinishedForTesting: Bool { activePlayback?.isFinished ?? true }
 
   func stallActiveTrackForTesting() { activePlayback?.onReadStalled?() }
   func resumeActiveTrackForTesting() { activePlayback?.onReadResumed?() }
+
+  /// Raise the underrun signals, for the same reason: draining a real node on
+  /// cue needs a link that goes slow without going wrong, which is the one
+  /// condition this whole change exists because nobody can reproduce.
+  func underrunActiveTrackForTesting() { activePlayback?.onUnderrun?() }
+  func endUnderrunActiveTrackForTesting() { activePlayback?.onUnderrunEnded?() }
+  var underrunCountForTesting: Int { underrunsThisTrack }
 
   /// Fires the *real* wired failure handler, which is the entry point to the
   /// reconnection. Not a shortcut past what is being tested: the alternative

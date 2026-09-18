@@ -55,6 +55,27 @@ public final class TrackPlayback {
   /// Fires when reads recover, so it can say so again.
   public var onReadResumed: (() -> Void)?
 
+  /**
+   Fires when the node has run out of scheduled audio.
+
+   The stall pair above only speaks for a read that **threw**. A read that is
+   merely slow — anything up to `HTTPByteFetcher.defaultTimeout`, which is
+   eight seconds — returns successfully and says nothing, so the depth drains
+   to zero, the node renders silence, the rendered position stops advancing
+   and the engine goes on reporting `.playing`. That is the dropout listeners
+   describe as the music cutting out and coming back, and it is the one
+   remaining way this engine fails with no instrument on it: nothing throws,
+   nothing is counted, nothing is logged, and §12 of `docs/architecture.md`
+   is a list of exactly this shape of fault.
+
+   Raised from the buffer completion that takes the depth to zero, which is
+   the moment the node has nothing left to render — not a prediction that it
+   is about to, and not an inference from a clock.
+   */
+  public var onUnderrun: (() -> Void)?
+  /// Fires when a buffer is scheduled again after an underrun.
+  public var onUnderrunEnded: (() -> Void)?
+
   private let reader: TrackReader
   private let voice: AudioGraph.Voice
   private let queue: DispatchQueue
@@ -82,6 +103,8 @@ public final class TrackPlayback {
   public var onFirstBufferScheduled: (() -> Void)?
 
   private var scheduledAny = false
+  /// Whether the node is currently out of audio — see `onUnderrun`.
+  private var underrunning = false
   /// Consecutive failed reads, reset by any successful one.
   private var consecutiveFailures = 0
   /// When the current run of failures began, for the wall-clock budget.
@@ -197,6 +220,7 @@ public final class TrackPlayback {
     reachedEnd = false
     scheduledAhead = 0
     scheduledAny = false
+    underrunning = false
     startFrameValue = frame
     readerOriginValue = readerOrigin
     consecutiveFailures = 0
@@ -345,12 +369,29 @@ public final class TrackPlayback {
         self.scheduledAhead += 1
         let isFirst = !self.scheduledAny
         self.scheduledAny = true
+        // Claimed here rather than in the completion handler: the drought
+        // ends when there is audio to render again, which is now, not when
+        // the buffer that ends it finishes playing half a second later.
+        let recovered = self.underrunning
+        self.underrunning = false
         self.lock.unlock()
         if isFirst { self.onFirstBufferScheduled?() }
+        if recovered { self.onUnderrunEnded?() }
 
         self.voice.player.scheduleBuffer(buffer) { [weak self] in
           guard let self else { return }
-          self.lock.lock(); self.scheduledAhead -= 1; self.lock.unlock()
+          self.lock.lock()
+          self.scheduledAhead -= 1
+          // Zero depth with the track neither finished nor stopped is the
+          // node about to render silence. `reachedEnd` excludes the ordinary
+          // drain at the end of a track, and `stopped` the flush that
+          // `stop()` fires a completion for on every buffer it discards —
+          // both of which reach zero legitimately.
+          let starved =
+            self.scheduledAhead <= 0 && !self.reachedEnd && !self.stopped && !self.underrunning
+          if starved { self.underrunning = true }
+          self.lock.unlock()
+          if starved { self.onUnderrun?() }
           self.notifyEndIfDrained()
           self.fill()
         }
