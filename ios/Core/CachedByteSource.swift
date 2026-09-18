@@ -353,7 +353,10 @@ public final class CachedByteSource {
       guard let gap else { continue }
 
       do {
-        try fetchWindow(covering: gap, total: total)
+        // `atLeastTo` is the gap's *lower* bound, which is what makes this one
+        // window rather than the whole gap: read-ahead has nobody waiting on
+        // it, so it stays interruptible.
+        try fetchWindow(from: gap.lowerBound, atLeastTo: gap.lowerBound, total: total)
       } catch {
         // Read-ahead is best effort by definition — the bytes it wanted are
         // not wanted *yet*. A failure here must not surface: the read that

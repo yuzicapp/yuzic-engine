@@ -26,9 +26,16 @@ final class FakeFetcher: ByteFetcher, @unchecked Sendable {
   /// and look at it mid-flight.
   var gate: DispatchSemaphore?
 
+  /// Filled through a pointer rather than `Data`'s subscript. The read-ahead
+  /// tests need fixtures of a few megabytes to have anything to read ahead
+  /// *into*, and per-byte subscripting on `Data` takes seconds at that size —
+  /// which is how a suite stops being run.
   init(bytes: Int) {
     var data = Data(count: bytes)
-    for index in 0..<bytes { data[index] = UInt8(index % 251) }
+    data.withUnsafeMutableBytes { raw in
+      guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
+      for index in 0..<bytes { base[index] = UInt8(index % 251) }
+    }
     blob = data
   }
 

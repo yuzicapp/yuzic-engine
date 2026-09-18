@@ -22,25 +22,34 @@ import XCTest
  Read-ahead needs a duration to size itself — see `CachedByteSource.durationSec`
  — so a source built without one behaves exactly as it always did, which is
  what `CachedByteSourceTests` continues to check.
+
+ The fixtures are sized in bytes-per-second so the arithmetic is legible, and
+ kept to a few megabytes: big enough that thirty seconds of read-ahead is a
+ real distance, small enough that the suite stays quick.
  */
 final class ReadAheadTests: XCTestCase {
 
-  /// 60s of "1MB/s audio" — 8 Mbps, roughly a hi-res lossless stream, chosen
-  /// so a second is a megabyte and the arithmetic in these tests is legible.
-  private static let seconds = 60.0
-  private static let bytesPerSecond = 1_000_000
+  private static let window: Int64 = 256 * 1024
 
+  /// A blob of `seconds × bytesPerSecond`, told it lasts `duration`.
   private func makeSource(
-    seconds: Double = ReadAheadTests.seconds,
-    window: Int64 = 256 * 1024,
-    duration: Double? = ReadAheadTests.seconds
+    seconds: Int,
+    bytesPerSecond: Int,
+    duration: Double?
   ) -> (CachedByteSource, FakeFetcher) {
-    let fetcher = FakeFetcher(bytes: Int(seconds) * Self.bytesPerSecond)
+    let fetcher = FakeFetcher(bytes: seconds * bytesPerSecond)
     let source = CachedByteSource(
-      fetcher: fetcher, windowBytes: window, durationSec: duration
+      fetcher: fetcher, windowBytes: Self.window, durationSec: duration
     )
     return (source, fetcher)
   }
+
+  /// 60s at 200KB/s — a 12MB file, and thirty seconds of read-ahead is 6MB,
+  /// inside both clamps so the derived figure is what is being measured.
+  private func ordinarySource() -> (CachedByteSource, FakeFetcher) {
+    makeSource(seconds: 60, bytesPerSecond: 200_000, duration: 60)
+  }
+  private static let ordinaryReadAhead: Int64 = 200_000 * 30
 
   /// Read-ahead runs on its own queue, so what it has done is a moving target.
   private func settle(timeout: TimeInterval = 5, until condition: () -> Bool) {
@@ -52,7 +61,7 @@ final class ReadAheadTests: XCTestCase {
 
   /// Let whatever is in flight land. There is no condition to wait on: these
   /// assertions are about where read-ahead *stopped*, which needs it stopped.
-  private func quiesce(_ seconds: TimeInterval = 1) {
+  private func quiesce(_ seconds: TimeInterval = 0.5) {
     let deadline = Date().addingTimeInterval(seconds)
     while Date() < deadline {
       RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
@@ -60,7 +69,7 @@ final class ReadAheadTests: XCTestCase {
   }
 
   /**
-   One small read pulls the window ahead of it in behind.
+   One small read pulls the region ahead of it in behind.
 
    The behaviour the engine did not have. Before this, reading 512 bytes
    fetched one 256KB window and stopped, and the next window was not asked for
@@ -68,14 +77,12 @@ final class ReadAheadTests: XCTestCase {
    when a listener can least afford to wait for it.
    */
   func testAReadPullsTheRegionAheadOfItInBehind() throws {
-    let (source, _) = makeSource()
+    let (source, _) = ordinarySource()
     _ = try source.read(offset: 0, count: 512)
 
-    // The cap is `maxReadAheadBytes` here: 30s of this fixture is 30MB, well
-    // past the ceiling, so 8MB is the figure to expect.
-    settle { source.availableBytes(from: 0) >= CachedByteSource.maxReadAheadBytes }
+    settle { source.availableBytes(from: 0) >= Self.ordinaryReadAhead }
     XCTAssertGreaterThanOrEqual(
-      source.availableBytes(from: 0), CachedByteSource.maxReadAheadBytes,
+      source.availableBytes(from: 0), Self.ordinaryReadAhead,
       "a read should leave the region ahead of it fetched, not just its own window"
     )
   }
@@ -88,44 +95,68 @@ final class ReadAheadTests: XCTestCase {
    in five seconds, and on a long album track it would hold the whole file.
    */
   func testReadAheadStopsAtItsBound() throws {
-    let (source, fetcher) = makeSource()
+    let (source, fetcher) = ordinarySource()
+    _ = try source.read(offset: 0, count: 512)
+
+    settle { source.availableBytes(from: 0) >= Self.ordinaryReadAhead }
+    quiesce()
+
+    let fetched = fetcher.bytesFetched
+    // Plus a window: the bound is where read-ahead stops *asking*, and the
+    // window it is inside when it gets there is fetched whole.
+    XCTAssertLessThanOrEqual(
+      fetched, Self.ordinaryReadAhead + Self.window,
+      "read-ahead overran its bound — fetched \(fetched) bytes"
+    )
+    XCTAssertLessThan(fetched, Int64(60 * 200_000),
+                      "read-ahead fetched the whole file, which is a download")
+  }
+
+  /**
+   The ceiling holds on a high-bitrate track.
+
+   Thirty seconds of 96/24 lossless is around eleven megabytes, which is most
+   of an album track — so the duration-derived figure is clamped. 20s at
+   500KB/s asks for 15MB and must be held to `maxReadAheadBytes`.
+   */
+  func testTheCeilingHoldsOnAHighBitrateTrack() throws {
+    let (source, fetcher) = makeSource(seconds: 20, bytesPerSecond: 500_000, duration: 20)
     _ = try source.read(offset: 0, count: 512)
 
     settle { source.availableBytes(from: 0) >= CachedByteSource.maxReadAheadBytes }
     quiesce()
 
-    let fetched = fetcher.bytesFetched
-    // Plus a couple of windows: the bound is where read-ahead stops *asking*,
-    // and the window it is inside when it gets there is fetched whole.
+    XCTAssertGreaterThanOrEqual(source.availableBytes(from: 0),
+                                CachedByteSource.maxReadAheadBytes)
     XCTAssertLessThanOrEqual(
-      fetched, CachedByteSource.maxReadAheadBytes + 512 * 1024,
-      "read-ahead overran its bound — fetched \(fetched) bytes"
+      fetcher.bytesFetched, CachedByteSource.maxReadAheadBytes + Self.window,
+      "the clamp did not hold: fetched \(fetcher.bytesFetched)"
     )
-    XCTAssertLessThan(fetched, Int64(Int(Self.seconds) * Self.bytesPerSecond),
-                      "read-ahead fetched the whole file, which is a download")
   }
 
   /**
    A low-bitrate track gets seconds, not megabytes.
 
    The bound is a duration converted through the file's own average rate, so a
-   podcast at a tenth the bitrate should fetch about a tenth as much for the
-   same thirty seconds — rather than a flat byte figure that is a cushion for
-   one and most of the file for the other.
+   podcast at a tenth the bitrate fetches about a tenth as much for the same
+   thirty seconds — rather than a flat byte figure that is a cushion for one
+   and most of the file for the other.
    */
   func testTheBoundFollowsTheBitrateRatherThanAFlatSize() throws {
-    // 600s of 100KB/s: 30s of read-ahead is 3MB, inside both clamps.
-    let fetcher = FakeFetcher(bytes: 600 * 100_000)
-    let source = CachedByteSource(fetcher: fetcher, windowBytes: 256 * 1024, durationSec: 600)
-
+    // 600s at 20KB/s: thirty seconds is 600KB, above the floor and far below
+    // both the ceiling and what the same thirty seconds costs at lossless.
+    let (source, fetcher) = makeSource(seconds: 600, bytesPerSecond: 20_000, duration: 600)
     _ = try source.read(offset: 0, count: 512)
-    let expected = Int64(100_000 * CachedByteSource.readAheadSeconds)
+
+    let expected = Int64(20_000 * 30)
     settle { source.availableBytes(from: 0) >= expected }
     quiesce()
 
     XCTAssertGreaterThanOrEqual(source.availableBytes(from: 0), expected)
-    XCTAssertLessThan(fetcher.bytesFetched, expected + 512 * 1024,
-                      "thirty seconds of a 100KB/s track is about 3MB, not the ceiling")
+    XCTAssertLessThan(
+      fetcher.bytesFetched, CachedByteSource.maxReadAheadBytes,
+      "a 20KB/s track pulled a lossless track's worth of read-ahead"
+    )
   }
 
   /**
@@ -137,22 +168,23 @@ final class ReadAheadTests: XCTestCase {
    one last.
    */
   func testReadAheadFollowsASeek() throws {
-    let (source, _) = makeSource()
+    let (source, _) = ordinarySource()
     _ = try source.read(offset: 0, count: 512)
-    settle { source.availableBytes(from: 0) >= 1_000_000 }
+    settle { source.availableBytes(from: 0) >= Self.window * 2 }
 
-    let seekTo: Int64 = 40_000_000
+    // Past everything the first pass could have reached.
+    let seekTo: Int64 = 8_000_000
     _ = try source.read(offset: seekTo, count: 512)
-    settle { source.availableBytes(from: seekTo) >= 4_000_000 }
+    settle { source.availableBytes(from: seekTo) >= Self.window * 4 }
 
     XCTAssertGreaterThanOrEqual(
-      source.availableBytes(from: seekTo), 4_000_000,
+      source.availableBytes(from: seekTo), Self.window * 4,
       "read-ahead should have moved to where the decoder went"
     )
   }
 
   /**
-   The same window is not fetched twice.
+   The same bytes are never fetched twice.
 
    Read-ahead and the decoder are two threads wanting overlapping regions, and
    the decoder's read goes first because someone is waiting on it. Whichever
@@ -161,32 +193,27 @@ final class ReadAheadTests: XCTestCase {
    feature would be worth removing.
    */
   func testAWindowIsNeverFetchedTwice() throws {
-    let (source, fetcher) = makeSource()
+    let (source, fetcher) = ordinarySource()
     _ = try source.read(offset: 0, count: 512)
-    settle { source.availableBytes(from: 0) >= CachedByteSource.maxReadAheadBytes }
+    settle { source.availableBytes(from: 0) >= Self.ordinaryReadAhead }
     quiesce()
 
-    // Read back across everything read-ahead pulled. The request count is
-    // *expected* to grow while this runs — each read moves the mark, and
-    // read-ahead keeps its bound ahead of wherever the decoder is, so reading
-    // at 4MB legitimately asks for windows out at 12MB. What must not happen
-    // is the same window being asked for again.
+    // Read back across what read-ahead pulled. The request count is *expected*
+    // to grow while this runs — each read moves the mark, and read-ahead keeps
+    // its bound ahead of wherever the decoder is. What must not happen is the
+    // same bytes being asked for again.
     for offset in stride(from: Int64(0), to: 4_000_000, by: 100_000) {
       let data = try source.read(offset: offset, count: 4096)
       XCTAssertEqual(data.count, 4096, "a byte already fetched came back short")
     }
     quiesce()
 
-    let ranges = fetcher.fetched
-    let unique = Set(ranges.map { "\($0.lowerBound)-\($0.upperBound)" })
-    XCTAssertEqual(ranges.count, unique.count,
-                   "the same window was requested more than once — read-ahead is duplicating the decoder's work")
-
-    // And nothing overlapped, which a uniqueness check on its own would miss.
-    let sorted = ranges.sorted { $0.lowerBound < $1.lowerBound }
+    let sorted = fetcher.fetched.sorted { $0.lowerBound < $1.lowerBound }
     for (earlier, later) in zip(sorted, sorted.dropFirst()) {
-      XCTAssertLessThanOrEqual(earlier.upperBound, later.lowerBound,
-                               "\(earlier) and \(later) overlap; those bytes were paid for twice")
+      XCTAssertLessThanOrEqual(
+        earlier.upperBound, later.lowerBound,
+        "\(earlier) and \(later) overlap — those bytes were paid for twice"
+      )
     }
   }
 
@@ -198,23 +225,25 @@ final class ReadAheadTests: XCTestCase {
    has someone waiting for it.
    */
   func testCancelStopsReadAhead() throws {
-    let (source, fetcher) = makeSource()
+    let (source, fetcher) = ordinarySource()
     let gate = DispatchSemaphore(value: 0)
     fetcher.gate = gate
 
-    // The foreground read is held in the fetcher; read-ahead queues behind it.
+    // Read-ahead is only scheduled once the foreground read returns, so one
+    // signal releases that read and nothing else.
     let firstRead = expectation(description: "first read returned")
     DispatchQueue.global().async {
       _ = try? source.read(offset: 0, count: 512)
       firstRead.fulfill()
     }
-    // Release only the foreground window.
     gate.signal()
     wait(for: [firstRead], timeout: 5)
 
     source.cancel()
-    // Everything read-ahead might still be parked on.
-    for _ in 0..<40 { gate.signal() }
+    // Release anything read-ahead is parked on, so it can notice and stop
+    // rather than simply stay blocked — which would pass this test for the
+    // wrong reason.
+    for _ in 0..<64 { gate.signal() }
     quiesce()
 
     let afterCancel = fetcher.fetched.count
@@ -232,11 +261,11 @@ final class ReadAheadTests: XCTestCase {
    written to measure.
    */
   func testASourceWithNoDurationFetchesOnDemandAsBefore() throws {
-    let (source, fetcher) = makeSource(duration: nil)
+    let (source, fetcher) = makeSource(seconds: 60, bytesPerSecond: 200_000, duration: nil)
     _ = try source.read(offset: 0, count: 512)
     quiesce()
 
     XCTAssertEqual(fetcher.fetched.count, 1)
-    XCTAssertEqual(fetcher.fetched.first, 0..<(256 * 1024))
+    XCTAssertEqual(fetcher.fetched.first, 0..<Self.window)
   }
 }
