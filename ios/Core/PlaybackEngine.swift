@@ -232,29 +232,30 @@ public final class PlaybackEngine {
   /**
    How far ahead the current track must be fetched before the next one is.
 
-   A health check, not a reservoir: a connection that cannot keep well ahead
-   of one track has no business being asked to fetch a second. On a link that
-   is dropping reads the figure collapses toward zero and no preload happens,
+   A health check, not a reservoir: a connection that cannot keep ahead of one
+   track has no business being asked to fetch a second. On a link that is
+   dropping reads the figure collapses toward zero and no preload happens,
    which is the desired answer.
 
-   **This was two seconds**, and the reason given was that two seconds was all
-   a healthy stream could achieve — `bufferedFramesAhead` reports the fetched
-   window, fetching was on demand, and `TrackPlayback` stopped decoding once it
-   was two seconds ahead, so the window never ran further ahead than that.
-   Anything larger would have meant never preloading at all. That is no longer
-   true: `CachedByteSource` keeps `readAheadSeconds` of bytes ahead of the
-   decoder, so a healthy track now reads tens of seconds ahead and two seconds
-   is a bar almost anything clears, including links that are visibly
-   struggling.
+   Two seconds, because **the threshold has to be reachable by the slowest
+   configuration that still has to work**, and that is not the one read-ahead
+   improves. Read-ahead needs a duration to size itself, and two paths
+   deliberately have none: a downloaded track, read from disk where a cushion
+   buys nothing, and a stream whose host never said how long it is. Both still
+   report what they always did — `bufferedFramesAhead` measuring the fetched
+   window, which tops out around 2.2s — so a threshold above that is one they
+   can never clear.
 
-   Eight is a judgement rather than a measurement, and worth saying so. It is
-   four times the entire old cushion and roughly a quarter of the read-ahead
-   target, which is low enough that a merely-mediocre connection still gets its
-   gapless transition and high enough to mean something. `preloadNextIfIdle`
-   caps it at whatever is left of the track, so a short interlude is not
-   excluded by a threshold longer than itself.
+   This was briefly raised to 8 on the reasoning that read-ahead had made two
+   seconds trivial to clear. It had, *for streams with a duration*. For a
+   downloaded album it silently turned gapless off: the preload gate could not
+   open, every track fetched its successor at the transition, and nothing
+   reported a fault because not preloading is a legal state. Four tests caught
+   it. The lesson is the one already in `docs/architecture.md` §12 — a bound
+   raised to suit the fast path has to be checked against the slow one — and
+   the number stays where the slow path can reach it.
    */
-  public static let preloadAfterBufferedSec: Double = 8
+  public static let preloadAfterBufferedSec: Double = 2
 
   private var activeReader: TrackReader?
 

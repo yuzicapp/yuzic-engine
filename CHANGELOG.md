@@ -58,24 +58,19 @@ behaviour does not.
   track cannot pull most of a file the listener may skip; written through to
   the disk cache like any other window. Memory is unchanged — `storage` was
   always allocated to the whole declared length, so early bytes occupy space
-  that was reserved anyway. A track whose host gave no duration has nothing to
-  size read-ahead with and fetches on demand exactly as before.
+  that was reserved anyway.
+
+  Two paths deliberately keep the old behaviour, because read-ahead needs a
+  duration to size itself: a **downloaded track**, read from disk where a
+  cushion buys nothing, and a stream whose host never said how long it is.
+  Both fetch on demand exactly as before, and nothing about offline playback
+  changes.
 
 - **iOS: the buffer was half a second only at CD rate.** `bufferFrames` was a
   frame count, 22,050, while `read` returns *source* frames at the file's own
   rate — so the four buffers were 2s at 44.1kHz, 0.92s at 96kHz and 0.46s at
   192kHz. The files with the largest windows to fetch had the least slack to
   fetch them in. It is a duration now, converted per reader.
-
-### Changed
-
-- **`preloadAfterBufferedSec` is 8 seconds, was 2.** The old value was not a
-  judgement about health, it was the ceiling: fetching on demand meant
-  `bufferedSec` never reported more than about 2.2s, so anything higher would
-  have meant never preloading. With read-ahead a healthy track reads tens of
-  seconds ahead and two seconds is a bar a visibly struggling link clears.
-  `preloadNextIfIdle` still caps the threshold at whatever is left of the
-  track, so short interludes are unaffected.
 
 ## [1.0.11]
 

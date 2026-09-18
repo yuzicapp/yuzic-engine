@@ -208,20 +208,26 @@ final class PlaybackEngineTests: XCTestCase {
    well ahead of what is playing has no business being asked for another. On
    the link this was reported from, reads were failing outright.
 
-   Both bounds are relationships between constants rather than numbers, which
-   is the point of the test. The ceiling used to be a literal 2.2 — what the
-   read window could reach back when fetching was on demand — and moving to
-   read-ahead invalidated it without invalidating the reasoning. Tied to
-   `readAheadSeconds`, it keeps saying the thing worth saying: a threshold
-   above what fetching can actually achieve is a feature that never runs.
+   The ceiling is the interesting half, and read-ahead nearly moved it by
+   mistake. A source that reads ahead reports tens of seconds, so tying the
+   bound to `readAheadSeconds` looks like the modern answer — but read-ahead
+   needs a duration and two paths deliberately have none: a downloaded track,
+   and a stream whose host never gave a length. Those still top out around
+   2.2s, and they are the ones the bound has to be reachable by. Raising it to
+   suit the fast path turned gapless off for downloaded albums, silently,
+   because failing to preload is a legal state that reports nothing.
+
+   So the literal stays, and so does the reason for it.
    */
   func testNothingIsPreloadedWhileTheCurrentTrackIsStarved() {
     // Meaningfully above a starved link, which reaches fractions of a second.
     XCTAssertLessThan(0.4, PlaybackEngine.preloadAfterBufferedSec)
-    // And below what a healthy one now buffers, or nothing ever preloads.
-    XCTAssertLessThan(
-      PlaybackEngine.preloadAfterBufferedSec, CachedByteSource.readAheadSeconds,
-      "the preload gate is set above what read-ahead fetches, so it can never open"
+    // And reachable by a source that does *not* read ahead — a downloaded
+    // track, or a stream with no duration — where `bufferedFramesAhead` still
+    // reports the fetched window and measures about 2.2s.
+    XCTAssertLessThanOrEqual(
+      PlaybackEngine.preloadAfterBufferedSec, 2.2,
+      "the gate is above what a source without read-ahead can reach, so it can never open for one"
     )
   }
 

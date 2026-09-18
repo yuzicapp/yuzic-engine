@@ -214,7 +214,11 @@ final class UnderrunTests: XCTestCase {
    */
   func testStoppingIsNotAnUnderrun() throws {
     let graph = try offlineGraph()
-    let reader = SlowReader(servesBeforeBlocking: 4)
+    // Two, not four. `targetBuffersAhead` is four, so a reader that serves
+    // four is never asked a fifth time — the fill loop goes idle at target and
+    // the blocking read this waits on is never reached. The test timed out on
+    // its own setup, a step before the `stop()` it is about.
+    let reader = SlowReader(servesBeforeBlocking: 2)
     let playback = TrackPlayback(reader: reader, voice: graph.activeVoice)
 
     var underruns = 0

@@ -776,11 +776,24 @@ windows to fetch had the least slack to fetch them in. It is a duration now,
 converted per reader.
 
 What remains of the PCM depth is what it should always have been: cover for
-decode jitter, not for the network. Read-ahead also makes `bufferedSec`
-meaningful for the first time — it reported a sawtooth between zero and one
-window before — which is why `preloadAfterBufferedSec` moved from 2 to 8: the
-old value was chosen as the most that was reachable, and what is reachable
-changed.
+decode jitter, not for the network.
+
+**And one thing that looked like it followed, and did not.** Read-ahead makes
+`bufferedSec` mean something for a stream — it reported a sawtooth between zero
+and one window before — so `preloadAfterBufferedSec` was raised from 2 to 8 on
+the reasoning that two seconds had become a bar anything clears. It had, *for a
+stream with a duration*. Read-ahead needs one to size itself, and two paths
+deliberately have none: a downloaded track, read from disk where a cushion buys
+nothing, and a stream whose host never gave a length. Those still top out
+around 2.2s, so the raised gate could never open for them — which turned
+gapless off for every downloaded album, silently, because declining to preload
+is a legal state that reports no fault. Four tests caught it, nothing else
+would have, and the number is back at 2.
+
+The general form, and the reason it is written down here rather than quietly
+reverted: **a bound raised to suit the path that got faster has to be checked
+against the paths that did not.** The old value's stated reason — that the
+threshold has to be reachable — outlived the change that appeared to retire it.
 
 The common thread is that all of these are invisible to "does it return, and is
 the return value right". What catches them is asking what the code *did* — which
