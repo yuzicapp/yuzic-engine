@@ -205,15 +205,24 @@ final class PlaybackEngineTests: XCTestCase {
    A struggling stream is not asked to fetch a second track.
 
    The gate is a health check, not a reservoir: a connection that cannot keep
-   two seconds ahead of what is playing has no business being asked for
-   another. On the link this was reported from, reads were failing outright.
+   well ahead of what is playing has no business being asked for another. On
+   the link this was reported from, reads were failing outright.
+
+   Both bounds are relationships between constants rather than numbers, which
+   is the point of the test. The ceiling used to be a literal 2.2 — what the
+   read window could reach back when fetching was on demand — and moving to
+   read-ahead invalidated it without invalidating the reasoning. Tied to
+   `readAheadSeconds`, it keeps saying the thing worth saying: a threshold
+   above what fetching can actually achieve is a feature that never runs.
    */
   func testNothingIsPreloadedWhileTheCurrentTrackIsStarved() {
-    // Below the threshold, and with plenty of track left to go.
+    // Meaningfully above a starved link, which reaches fractions of a second.
     XCTAssertLessThan(0.4, PlaybackEngine.preloadAfterBufferedSec)
-    // The threshold has to be reachable, or the feature never runs at all:
-    // `bufferedFramesAhead` reports the read window, measured at ~2.2s here.
-    XCTAssertLessThanOrEqual(PlaybackEngine.preloadAfterBufferedSec, 2.2)
+    // And below what a healthy one now buffers, or nothing ever preloads.
+    XCTAssertLessThan(
+      PlaybackEngine.preloadAfterBufferedSec, CachedByteSource.readAheadSeconds,
+      "the preload gate is set above what read-ahead fetches, so it can never open"
+    )
   }
 
   /**

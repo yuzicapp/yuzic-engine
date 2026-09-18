@@ -3,11 +3,28 @@ import XCTest
 
 /// A fetcher over an in-memory blob that counts what was asked for. Stands in
 /// for the network so these tests are deterministic and fast.
+///
+/// Locked throughout, because read-ahead fetches from its own queue: a source
+/// with a duration has two threads reaching this object, and an unguarded
+/// `fetched.append` between them is a crash the suite would report as a
+/// mysterious flake rather than as the race it is.
 final class FakeFetcher: ByteFetcher, @unchecked Sendable {
   let blob: Data
-  private(set) var fetched: [Range<Int64>] = []
+  private let lock = NSLock()
+  private var fetchedRanges: [Range<Int64>] = []
+  var fetched: [Range<Int64>] {
+    lock.lock(); defer { lock.unlock() }
+    return fetchedRanges
+  }
   /// Set to fail the next fetch, to exercise the error path.
-  var failNext = false
+  var failNext: Bool {
+    get { lock.lock(); defer { lock.unlock() }; return failNextValue }
+    set { lock.lock(); failNextValue = newValue; lock.unlock() }
+  }
+  private var failNextValue = false
+  /// Blocks every fetch until signalled, so a test can hold read-ahead still
+  /// and look at it mid-flight.
+  var gate: DispatchSemaphore?
 
   init(bytes: Int) {
     var data = Data(count: bytes)
@@ -18,11 +35,17 @@ final class FakeFetcher: ByteFetcher, @unchecked Sendable {
   func contentLength() throws -> Int64 { Int64(blob.count) }
 
   func fetch(_ range: Range<Int64>) throws -> Data {
-    if failNext {
-      failNext = false
+    lock.lock()
+    if failNextValue {
+      failNextValue = false
+      lock.unlock()
       throw ByteSourceError.fetchFailed("injected")
     }
-    fetched.append(range)
+    fetchedRanges.append(range)
+    lock.unlock()
+
+    gate?.wait()
+
     let end = min(Int(range.upperBound), blob.count)
     guard Int(range.lowerBound) < end else { return Data() }
     return blob.subdata(in: Int(range.lowerBound)..<end)

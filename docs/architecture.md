@@ -742,15 +742,45 @@ subtlety — the ordinary drain at the end of a track and the flush `stop()`
 fires reach zero legitimately, and a check written against the depth alone
 would report a dropout on every track anyone ever finished.
 
-**It does not fix the dropout, and is not meant to.** The cushion is two
-seconds of PCM at 44.1kHz (`targetBuffersAhead` × `bufferFrames`, and
-proportionally less at every higher rate, since the count is in source frames),
-with no read-ahead underneath it: `CachedByteSource` fetches a window only when
-the decoder asks for bytes it does not have. So the engine has to land a round
-trip roughly every two seconds of playback with two seconds of slack, which is
-fine at the 273ms measured against a real server and is not fine on a link
-having a bad minute. Deepening that is the next question, and it is a question
-worth having a number for first — which is what this is.
+**The instrument came first, and then the cause it was built to measure.**
+The cushion was two seconds of PCM and nothing else. `TrackPlayback` schedules
+four buffers and stops; `CachedByteSource.ensure` fetched a window only once a
+read had arrived wanting bytes it did not have. So nothing in the engine ever
+ran ahead of the decoder, and a 256KB window is about two seconds of FLAC — a
+round trip due every two seconds of playback, with two seconds to cover it.
+At the 273ms measured against a real server that is comfortable. It has no
+margin at all for a link having a bad minute, which is what a phone on WiFi at
+the edge of a room is.
+
+Two things were wrong underneath that, and both are now fixed.
+
+**The cushion was in the wrong place.** PCM is the expensive way to hold audio
+— two seconds of 96kHz stereo float32 is about 1.5MB, and it buys two seconds.
+The compressed bytes are the cheap way, and `storage` is already allocated to
+the whole declared length of the file, so bytes fetched early cost *nothing*
+beyond bandwidth. `CachedByteSource` now runs a read-ahead pass on its own
+queue that keeps `readAheadSeconds` — thirty, the order Media3 holds on
+Android, where none of this was ever reported — of bytes ahead of wherever the
+decoder has reached. A window at a time, so a seek lands between iterations;
+behind the same one-fetch-at-a-time lock as the foreground read, because
+`HTTPByteFetcher` keeps a single in-flight task and a cancel has to reach the
+right one; bounded by a duration converted through the file's own average
+bitrate, so a podcast gets seconds rather than the whole episode; and written
+through to `DiskCache` like any other window.
+
+**And it shrank as the audio got better.** `bufferFrames` was 22,050 — half a
+second at 44.1kHz and at no other rate, because `read` returns source frames
+and `outputFormat` is built from `native.mSampleRate`. At 96kHz the four
+buffers were 0.92s in total and at 192kHz 0.46s, so the files with the largest
+windows to fetch had the least slack to fetch them in. It is a duration now,
+converted per reader.
+
+What remains of the PCM depth is what it should always have been: cover for
+decode jitter, not for the network. Read-ahead also makes `bufferedSec`
+meaningful for the first time — it reported a sawtooth between zero and one
+window before — which is why `preloadAfterBufferedSec` moved from 2 to 8: the
+old value was chosen as the most that was reachable, and what is reachable
+changed.
 
 The common thread is that all of these are invisible to "does it return, and is
 the return value right". What catches them is asking what the code *did* — which

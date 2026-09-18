@@ -288,7 +288,12 @@ public final class HTTPTrackReaderFactory: TrackReaderFactory {
       return streamingSource(url: url, track: track, timeOffsetSeconds: timeOffsetSeconds)
     }
 
-    let source = CachedByteSource(fetcher: fetcher, cache: cache, cacheId: track.id)
+    // The duration is what turns `readAheadSeconds` into a byte figure — see
+    // `CachedByteSource.readAheadBytes`. Nil where the host never said, which
+    // falls back to a fixed one.
+    let source = CachedByteSource(
+      fetcher: fetcher, cache: cache, cacheId: track.id, durationSec: track.durationSec
+    )
     // MP4-family containers keep `moov` at the tail unless written faststart,
     // and the parser's first reads go there. Without this an ALAC or AAC track
     // will not open until the whole file has landed — confirmed in the spike.

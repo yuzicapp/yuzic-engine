@@ -16,11 +16,31 @@ import AVFoundation
  */
 public final class TrackPlayback {
 
-  /// Half a second each, four deep: two seconds of slack. Enough to ride out a
-  /// window fetch on a slow connection, short enough that a stop takes effect
-  /// promptly.
-  public static let bufferFrames: AVAudioFrameCount = 22_050
+  /**
+   Half a second of audio per buffer, four deep: two seconds of slack.
+
+   A *duration*, converted per reader. It was a frame count — 22,050, which is
+   half a second at 44.1kHz and at no other rate, because `read` hands back
+   source frames at the file's own rate and `AudioFileReader.outputFormat` is
+   built from `native.mSampleRate`. So the cushion quietly shrank as the music
+   got better: 0.23s a buffer at 96kHz, under a second in total, and 0.46s in
+   total at 192kHz. Hi-res over a network had the least slack of anything the
+   engine plays and the largest windows to fetch, which is the wrong way round.
+
+   Short enough that a stop takes effect promptly, and it no longer has to be
+   the whole defence against a slow network: `CachedByteSource` now keeps
+   `readAheadSeconds` of *compressed* bytes ahead of the decoder, which is the
+   cheap place to hold a cushion. Two seconds of PCM covers decode jitter,
+   which is all it was ever the right tool for.
+   */
+  public static let bufferSeconds: TimeInterval = 0.5
   public static let targetBuffersAhead = 4
+
+  /// `bufferSeconds` in frames at a given rate. 44.1kHz stands in for a reader
+  /// that cannot yet say, which only happens before `open` has succeeded.
+  public static func bufferFrames(atSampleRate rate: Double) -> AVAudioFrameCount {
+    AVAudioFrameCount(((rate > 0 ? rate : 44_100) * bufferSeconds).rounded())
+  }
 
   /**
    How many times a failing read is retried before the track is given up on.
@@ -127,6 +147,9 @@ public final class TrackPlayback {
   /// it is a suite people stop running.
   private let retries: Int
   private let retryDelaySec: TimeInterval
+  /// This reader's buffer size, fixed at construction. The reader is opened
+  /// before a playback is built over it, so its rate is known by here.
+  private let bufferFrames: AVAudioFrameCount
 
   public init(
     reader: TrackReader,
@@ -139,6 +162,7 @@ public final class TrackPlayback {
     self.voice = voice
     self.retries = retries
     self.retryDelaySec = retryDelaySec
+    self.bufferFrames = TrackPlayback.bufferFrames(atSampleRate: reader.sampleRate)
     self.queue = DispatchQueue(label: "dev.yuzic.engine.\(label)", qos: .userInitiated)
   }
 
@@ -312,7 +336,7 @@ public final class TrackPlayback {
 
         let buffer: AVAudioPCMBuffer?
         do {
-          buffer = try self.reader.read(frames: Self.bufferFrames)
+          buffer = try self.reader.read(frames: self.bufferFrames)
           self.lock.lock()
           let wasStalled = self.consecutiveFailures > 0
           self.consecutiveFailures = 0

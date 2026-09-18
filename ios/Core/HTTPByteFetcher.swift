@@ -8,6 +8,12 @@ import Foundation
  render thread, behind a producer that stays a few seconds ahead. A stall then
  costs buffer-ahead rather than a dropout.
 
+ Two threads reach this class now — a decode read and `CachedByteSource`'s
+ read-ahead — and they are serialised *there*, by `fetchLock`, rather than
+ here. This class keeps one `inFlight` task and `cancel` cancels it, so two
+ concurrent `fetch` calls would have the second overwrite the first's handle
+ and a seek would abandon the wrong request.
+
  The interesting part is not the request, it is what happens when the server
  will not do ranges. A music server transcoding on the fly usually cannot: it
  does not know the length of a file it has not finished producing, so it answers

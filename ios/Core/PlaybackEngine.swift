@@ -230,22 +230,31 @@ public final class PlaybackEngine {
   private static let preloadBackoffCapSec: Double = 30
 
   /**
-   How far ahead the current track must be decoded before the next one is
-   fetched.
+   How far ahead the current track must be fetched before the next one is.
 
-   Two seconds, because that is what a healthy stream actually achieves here:
-   `targetBuffersAhead` schedules four half-second buffers, and measurement
-   puts a comfortable track at about 2.2s ahead. It is a health check, not a
-   reservoir — `bufferedFramesAhead` reports the read window, so a larger
-   figure is not merely conservative, it is unreachable and would mean never
-   preloading at all.
-
-   The point of gating on it: a connection that cannot keep two seconds ahead
-   of one track has no business being asked to fetch a second one. On a link
-   that is dropping reads this collapses toward zero and no preload happens,
+   A health check, not a reservoir: a connection that cannot keep well ahead
+   of one track has no business being asked to fetch a second. On a link that
+   is dropping reads the figure collapses toward zero and no preload happens,
    which is the desired answer.
+
+   **This was two seconds**, and the reason given was that two seconds was all
+   a healthy stream could achieve — `bufferedFramesAhead` reports the fetched
+   window, fetching was on demand, and `TrackPlayback` stopped decoding once it
+   was two seconds ahead, so the window never ran further ahead than that.
+   Anything larger would have meant never preloading at all. That is no longer
+   true: `CachedByteSource` keeps `readAheadSeconds` of bytes ahead of the
+   decoder, so a healthy track now reads tens of seconds ahead and two seconds
+   is a bar almost anything clears, including links that are visibly
+   struggling.
+
+   Eight is a judgement rather than a measurement, and worth saying so. It is
+   four times the entire old cushion and roughly a quarter of the read-ahead
+   target, which is low enough that a merely-mediocre connection still gets its
+   gapless transition and high enough to mean something. `preloadNextIfIdle`
+   caps it at whatever is left of the track, so a short interlude is not
+   excluded by a threshold longer than itself.
    */
-  public static let preloadAfterBufferedSec: Double = 2
+  public static let preloadAfterBufferedSec: Double = 8
 
   private var activeReader: TrackReader?
 

@@ -32,13 +32,50 @@ behaviour does not.
   stopped. The ordinary drain at the end of a track and the flush a stop fires
   both reach zero depth legitimately and are excluded.
 
-  **This measures the dropout; it does not fix it.** The cushion is two seconds
-  of PCM at 44.1kHz and proportionally less above it, with no read-ahead
-  beneath it, so the engine has to land a round trip every couple of seconds of
-  playback. Making that cushion bigger is the next change, and this is what
-  will say whether it worked. No JavaScript API change: the underrun surfaces
-  through the existing `buffering` state, so hosts need no update and the
-  platforms stay at parity.
+  No JavaScript API change: the underrun surfaces through the existing
+  `buffering` state, so hosts need no update and the platforms stay at parity.
+
+### Fixed
+
+- **iOS cut out over the network because nothing fetched ahead.** The cushion
+  between a listener and their connection was two seconds of decoded PCM, and
+  that was all of it: `CachedByteSource` asked the network for a window only
+  once a read had arrived wanting bytes it did not have, and `TrackPlayback`
+  stops decoding once it is two seconds ahead, so nothing ever ran in front of
+  the decoder. A 256KB window is about two seconds of FLAC — a round trip due
+  every two seconds of playback, with two seconds of slack to cover it. Fine at
+  the 273ms measured against a real server; no margin at all for a phone at the
+  edge of a room. Reported on WiFi as well as cellular, and never on Android,
+  where Media3 holds tens of seconds.
+
+  `CachedByteSource` now reads ahead on its own queue, keeping thirty seconds
+  of bytes in front of wherever the decoder has reached. A window at a time, so
+  a seek lands between iterations rather than waiting out a request nobody
+  wants; serialised with the decoder's own reads, because `HTTPByteFetcher`
+  holds one in-flight task and a cancel has to reach the right one; sized by
+  converting the duration through the file's own average bitrate, so a podcast
+  gets seconds rather than the whole episode, and clamped to 8MB so a 96/24
+  track cannot pull most of a file the listener may skip; written through to
+  the disk cache like any other window. Memory is unchanged — `storage` was
+  always allocated to the whole declared length, so early bytes occupy space
+  that was reserved anyway. A track whose host gave no duration has nothing to
+  size read-ahead with and fetches on demand exactly as before.
+
+- **iOS: the buffer was half a second only at CD rate.** `bufferFrames` was a
+  frame count, 22,050, while `read` returns *source* frames at the file's own
+  rate — so the four buffers were 2s at 44.1kHz, 0.92s at 96kHz and 0.46s at
+  192kHz. The files with the largest windows to fetch had the least slack to
+  fetch them in. It is a duration now, converted per reader.
+
+### Changed
+
+- **`preloadAfterBufferedSec` is 8 seconds, was 2.** The old value was not a
+  judgement about health, it was the ceiling: fetching on demand meant
+  `bufferedSec` never reported more than about 2.2s, so anything higher would
+  have meant never preloading. With read-ahead a healthy track reads tens of
+  seconds ahead and two seconds is a bar a visibly struggling link clears.
+  `preloadNextIfIdle` still caps the threshold at whatever is left of the
+  track, so short interludes are unaffected.
 
 ## [1.0.11]
 

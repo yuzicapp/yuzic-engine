@@ -102,7 +102,7 @@ final class UnderrunTests: XCTestCase {
 
     init(buffers: Int) {
       self.remaining = buffers
-      self.totalFrames = Int64(buffers) * Int64(TrackPlayback.bufferFrames)
+      self.totalFrames = Int64(buffers) * Int64(TrackPlayback.bufferFrames(atSampleRate: 44_100))
     }
 
     func open() throws {}
@@ -150,7 +150,7 @@ final class UnderrunTests: XCTestCase {
     wait(for: [reader.blocked], timeout: 5)
 
     // Two buffers were scheduled before the block. Render past both.
-    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames * 3)
+    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames(atSampleRate: 44_100) * 3)
 
     wait(for: [underran], timeout: 5)
     // Unwound through the playback, not just the reader: `tearDown` drops the
@@ -171,7 +171,7 @@ final class UnderrunTests: XCTestCase {
 
     try playback.start(atFrame: 0)
     wait(for: [reader.blocked], timeout: 5)
-    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames * 3)
+    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames(atSampleRate: 44_100) * 3)
     wait(for: [underran], timeout: 5)
 
     reader.release()
@@ -197,7 +197,7 @@ final class UnderrunTests: XCTestCase {
     playback.onEndOfTrack = { finished.fulfill() }
 
     try playback.start(atFrame: 0)
-    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames * 5)
+    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames(atSampleRate: 44_100) * 5)
 
     wait(for: [finished], timeout: 5)
     XCTAssertEqual(underruns, 0,
@@ -223,7 +223,7 @@ final class UnderrunTests: XCTestCase {
     try playback.start(atFrame: 0)
     wait(for: [reader.blocked], timeout: 5)
     playback.stop()
-    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames * 6)
+    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames(atSampleRate: 44_100) * 6)
 
     XCTAssertEqual(underruns, 0, "a stop discards buffers; it does not run out of them")
     playback.stopAndWait()
