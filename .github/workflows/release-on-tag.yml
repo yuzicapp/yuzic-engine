@@ -33,15 +33,44 @@ jobs:
         with:
           ref: ${{ steps.release.outputs.tag }}
 
+      # The registry is not read-your-writes. `npm publish` returns success and
+      # `npm view` can still answer with the *previous* version for a couple of
+      # minutes afterwards — measured at about 2.5 minutes on 1.0.12. Asking
+      # once therefore fails a release that is perfectly fine, which is exactly
+      # what happened to the v1.0.11 tag: it was pushed straight after the
+      # publish, this step read the old version, and the run had to be
+      # re-dispatched by hand once the registry caught up.
+      #
+      # So it waits rather than deciding on the first answer. Five minutes in
+      # fifteen-second steps, and it still fails if the version genuinely never
+      # appears — this is a retry on propagation delay, not a way of passing a
+      # check that should fail.
       - name: Verify tag and npm package agree
         env:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           VERSION="${TAG#v}"
           SOURCE_VERSION="$(node -p "require('./package.json').version")"
-          test "$SOURCE_VERSION" = "$VERSION"
-          PUBLISHED_VERSION="$(npm view "yuzic-engine@$VERSION" version --registry=https://registry.npmjs.org)"
-          test "$PUBLISHED_VERSION" = "$VERSION"
+          if [ "$SOURCE_VERSION" != "$VERSION" ]; then
+            echo "package.json is $SOURCE_VERSION but the tag says $VERSION" >&2
+            exit 1
+          fi
+
+          DEADLINE=$(( $(date +%s) + 300 ))
+          while :; do
+            PUBLISHED_VERSION="$(npm view "yuzic-engine@$VERSION" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
+              echo "npm serves $VERSION"
+              break
+            fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "npm still does not serve yuzic-engine@$VERSION after 5 minutes." >&2
+              echo "Publish it before pushing the tag; this step does not publish." >&2
+              exit 1
+            fi
+            echo "npm does not serve $VERSION yet; waiting for the registry to catch up."
+            sleep 15
+          done
 
       - name: Create GitHub Release
         env:
