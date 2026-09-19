@@ -1655,10 +1655,12 @@ public final class PlaybackEngine {
   /**
    Whether the track that just "ended" stopped a long way short of its length.
 
-   The sequential transport is the one that can end a track early with nothing
-   thrown anywhere. `TrackPlayback` treats a read that returns no frames and no
-   error as the genuine end of the file, which is the only thing it can do from
-   there — and a transcode whose connection dies produces exactly that.
+   A track can end early with nothing thrown anywhere, and `TrackPlayback`
+   treats a read that returns no frames and no error as the genuine end of the
+   file, which is the only thing it can do from there. This was written for the
+   sequential transport, where a transcode whose connection dies produces
+   exactly that, and it has since had to grow: the ranged transport reaches the
+   same place by a different road — see below.
    `StreamingByteSource` is marked finished by its producer's `onFinish`,
    `totalBytes()` drops from the estimate to the bytes that actually arrived,
    and the next read comes back empty at what is now, by every measure the
@@ -1675,22 +1677,57 @@ public final class PlaybackEngine {
    The length is what catches it, because it is the one fact the broken
    transport cannot forge: it comes from the host's metadata, not from the
    bytes. `track.durationSec` rather than `trustedDuration` for that reason —
-   the latter falls back to a reader-derived length, and on this transport that
-   length is the guess that is already wrong.
+   the latter falls back to a reader-derived length, and on the sequential
+   transport that length is the guess that is already wrong.
 
-   Excluded, deliberately:
+   **The ranged transport used to be excluded here, and that was a hole.** The
+   comment said its length is the server's `Content-Length` and its end really
+   is the end, which is true of the *bytes* and says nothing about a reader
+   that stopped before reaching them. `AudioFileReader` did exactly that: it
+   ended every track at `kExtAudioFileProperty_FileLengthFrames`, which for a
+   container with no packet table is extrapolated from the leading frames'
+   bitrate and goes short on a front-loaded VBR file. So the one transport
+   this check declined to look at was the one where a perfectly healthy
+   connection delivered a song that stopped two thirds of the way through —
+   the same silent skip, arriving by the one route that had been reasoned out
+   of scope. `AudioFileReader.lengthIsMeasured` is the fix for the cause; this
+   is the net under it.
 
-   - The ranged transport, whose length is the server's `Content-Length` and
-     whose end really is the end.
+   Excluded, deliberately, and each for a reason the hole did not have:
+
    - Live radio, which has no length to fall short of.
    - A host that did not say how long the track is, leaving nothing to check
      against.
+   - Genuine ends, which land inside `truncationToleranceSec`.
+   - A ranged track whose *reader* agrees the audio ran out where it did. This
+     is what replaces the blanket exclusion, and it answers the worry that
+     exclusion was written for: a short file carrying an optimistic tag must
+     still be able to finish. On the ranged transport the reader's length is
+     an independent witness — it came from the container over a source that
+     can be re-read, not from a byte stream that died — so when it says the
+     audio ended where playback stopped, the tag is the thing that is wrong
+     and the track has genuinely finished. Only a stop short of *both*
+     lengths is a truncation.
+
+   That witness is deliberately not consulted on the sequential transport,
+   where it is no witness at all: `StreamingByteSource.totalBytes()` collapses
+   from its estimate to the bytes that actually arrived the moment the
+   producer stops, so the reader's length agrees with any truncation by
+   construction. There the host's duration is the only fact left, which is
+   what this check was originally built on.
    */
   private func endedShortOfItsLength() -> Bool {
-    guard let reader = activeReader, reader.isSequential else { return false }
+    guard let reader = activeReader else { return false }
     guard let track = queue.activeTrack, !track.continuous else { return false }
     guard let declared = track.durationSec, declared > 0 else { return false }
-    return progress.positionSec < declared - Self.truncationToleranceSec
+    let position = progress.positionSec
+    guard position < declared - Self.truncationToleranceSec else { return false }
+    // See above: on the forward-only transport the reader's length is derived
+    // from the bytes that arrived, so it cannot contradict their disappearance.
+    if reader.isSequential { return true }
+    guard reader.sampleRate > 0, reader.totalFrames > 0 else { return true }
+    let readerSec = Double(reader.totalFrames) / reader.sampleRate
+    return position < readerSec - Self.truncationToleranceSec
   }
 
   // Test seams: driving these through real timing would need a track long

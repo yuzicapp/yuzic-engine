@@ -48,6 +48,35 @@ public final class AudioFileReader: TrackReader {
   /// Silence at the end, which playback stops before.
   public private(set) var remainderFrames: Int64 = 0
 
+  /**
+   Whether `totalFrames` was counted or guessed.
+
+   `kExtAudioFileProperty_FileLengthFrames` answers both questions with the
+   same number and says nothing about which one it answered. Where the
+   container carries a packet table — the MP4 family, and an MP3 with a
+   Xing/LAME header — the count is real: every packet's frames are accounted
+   for, and the length is the music to the sample. Where it does not, Core
+   Audio has nothing to count and **extrapolates from the leading frames'
+   bitrate**, which for a VBR file is a guess about the rest of the song made
+   from its first few seconds.
+
+   That guess goes short on exactly the files people stream. A front-loaded
+   VBR MP3 — a loud opening, a quieter second half — spends more bits per
+   second at the head than it averages, so multiplying the head's rate by the
+   file's bytes under-counts the frames. `read` then stopped at a number that
+   was never the end of anything, returned nil, and `TrackPlayback` read that
+   as the file running out. The queue advanced. Same symptom as every other
+   fault in §12 of `docs/architecture.md`, arriving through the one door left
+   open: a length that looked like a fact.
+
+   MP3 is where it was reported and MP3 is the one format that cannot be
+   fixtured in process — Core Audio decodes it and will not encode it, which
+   is the standing gap CONTRIBUTING names. So the distinction is drawn from
+   the file rather than from the format: the packet table either answered or
+   it did not, and nothing here has to know which container asked.
+   */
+  public private(set) var lengthIsMeasured = false
+
   /// Playable frames handed out so far. Tracked rather than asked for, because
   /// `ExtAudioFile` counts in file frames and this has to count in music.
   private var framesRead: Int64 = 0
@@ -189,7 +218,9 @@ public final class AudioFileReader: TrackReader {
     var frameSize = UInt32(MemoryLayout<Int64>.size)
     ExtAudioFileGetProperty(ext, kExtAudioFileProperty_FileLengthFrames, &frameSize, &frames)
 
-    readEncoderPadding(from: file)
+    // Asked first, because its *answer* is what says whether the length below
+    // may be treated as a boundary — see `lengthIsMeasured`.
+    lengthIsMeasured = readEncoderPadding(from: file)
     // Used as reported. `ExtAudioFile` has already applied the packet table:
     // measured on a 2s AAC file, it returns 88200 for 88200 frames of input
     // with priming=2112 and remainder=824 sitting alongside — so this length
@@ -219,14 +250,21 @@ public final class AudioFileReader: TrackReader {
    Kept exposed because "how much padding does this file declare" is worth
    being able to see, and because a future format handled by a decoder that
    does *not* trim would need it.
+
+   Returns whether the packet table answered at all, which is a second and
+   more load-bearing fact than the padding it hands back — see
+   `lengthIsMeasured`. The two are the same question asked once: a container
+   that can say how much padding it has is a container whose frames have been
+   counted, and one that cannot is one whose length was extrapolated.
    */
-  private func readEncoderPadding(from file: AudioFileID) {
+  private func readEncoderPadding(from file: AudioFileID) -> Bool {
     var info = AudioFilePacketTableInfo()
     var size = UInt32(MemoryLayout<AudioFilePacketTableInfo>.size)
     let status = AudioFileGetProperty(file, kAudioFilePropertyPacketTableInfo, &size, &info)
-    guard status == noErr else { return }
+    guard status == noErr else { return false }
     primingFrames = Int64(max(0, info.mPrimingFrames))
     remainderFrames = Int64(max(0, info.mRemainderFrames))
+    return true
   }
 
   /**
@@ -258,12 +296,28 @@ public final class AudioFileReader: TrackReader {
     return Int64(Double(available) / bytesPerFrame)
   }
 
-  /// Seek, in playable frames — which is what `ExtAudioFile` already counts
-  /// in, padding excluded. No priming correction here: adding one skips real
-  /// audio, which is what the first version of this did.
+  /**
+   Seek, in playable frames — which is what `ExtAudioFile` already counts in,
+   padding excluded. No priming correction here: adding one skips real audio,
+   which is what the first version of this did.
+
+   The upper bound follows `read`'s, and for the same reason. A counted length
+   is a real end and clamping to it is right. An extrapolated one is not a
+   bound at all, and treating it as one is the truncation bug wearing a second
+   set of clothes: the seek bar is drawn from `PlaybackEngine.trustedDuration`,
+   which prefers the host's length when the two disagree materially — so a
+   listener dragging to 2:50 of a song the parser guessed was 2:40 long landed
+   at 2:40 and heard the track end. Silently, because a clamp reports nothing.
+
+   Seeking past the real end of an extrapolated file is left to fail rather
+   than be rounded down. `ExtAudioFileSeek` either refuses, which arrives as a
+   thrown read failure the engine says out loud, or lands at the end, which
+   arrives as a track that finished. Both are honest answers to a seek past
+   the end; quietly playing somewhere else is not one.
+   */
   public func seek(toFrame frame: Int64) throws {
     guard let extFile else { return }
-    let clamped = max(0, min(frame, totalFrames))
+    let clamped = lengthIsMeasured ? max(0, min(frame, totalFrames)) : max(0, frame)
     let status = ExtAudioFileSeek(extFile, clamped)
     guard status == noErr else { throw ReaderError.readFailed(status) }
     framesRead = clamped
@@ -308,6 +362,12 @@ public final class AudioFileReader: TrackReader {
    */
   private func rebuildAfterFailure() throws {
     let resumeAt = framesRead
+    // Carried across for the same reason `framesRead` is. A fresh parser
+    // re-reads the header and so comes back with the header's answer, which on
+    // an extrapolated length is the under-count this reader has already
+    // decoded past. Letting the rebuild reinstate it would re-arm the
+    // truncation a stall had nothing to do with.
+    let provenFrames = totalFrames
 
     if let extFile { ExtAudioFileDispose(extFile) }
     if let audioFile { AudioFileClose(audioFile) }
@@ -316,6 +376,7 @@ public final class AudioFileReader: TrackReader {
 
     try open(hint: openHint)
 
+    totalFrames = max(totalFrames, max(provenFrames, resumeAt))
     framesRead = resumeAt
     guard let ext = extFile else { throw ReaderError.openFailed(-1) }
     let status = ExtAudioFileSeek(ext, resumeAt)
@@ -353,7 +414,25 @@ public final class AudioFileReader: TrackReader {
     // Stop at the last frame of music rather than the last frame of file. The
     // remainder is the encoder's block padding; decoding it would append
     // silence to every lossy track, which is the other half of the seam.
-    let remaining = totalFrames > 0 ? totalFrames - framesRead : Int64(frames)
+    //
+    // **Only where that last frame was counted.** This is the whole of the
+    // truncation fix and it is deliberately narrow, because the trailing
+    // silence this guard exists to prevent is a real bug that was really
+    // shipped — see `readEncoderPadding` and `GaplessTrimmingTests`, which
+    // pins it. The two are not in tension once the question is asked
+    // precisely: padding can only be trimmed off a length that accounts for
+    // it, and a length that accounts for it is one the packet table produced.
+    // A file with no packet table has no declared padding to leave behind and
+    // an extrapolated length to stop at — so stopping there trims nothing and
+    // discards music, which is the reported fault exactly.
+    //
+    // Where the length was extrapolated the end of the audio is therefore the
+    // end of the *bytes*, and it is `readProc` that decides what that means.
+    // That decision is already careful: an empty read is an ending only at a
+    // length the source genuinely knows, and anything else is carried up as
+    // the failure it is. Handing the question there rather than answering it
+    // from a guess here is the point of the change.
+    let remaining = lengthIsMeasured && totalFrames > 0 ? totalFrames - framesRead : Int64(frames)
     guard remaining > 0 else { return nil }
     let wanted = AVAudioFrameCount(min(Int64(frames), remaining))
 
@@ -397,6 +476,18 @@ public final class AudioFileReader: TrackReader {
     guard count > 0 else { return nil }
 
     framesRead += Int64(count)
+    // An extrapolated length is a floor, not a ceiling, and the decoder is the
+    // thing that can prove it wrong. Every frame handed out past it is a frame
+    // the file demonstrably holds, so the figure is corrected rather than left
+    // to go on being wrong for the rest of the track.
+    //
+    // Not cosmetic. `totalFrames` is what the seek bar, the buffered estimate
+    // and `PlaybackEngine.referenceDuration` are all drawn from, and it is the
+    // second opinion `endedShortOfItsLength` consults before deciding whether
+    // an end was honest. A length that only ever under-reports would have that
+    // check disbelieve every ending on a VBR file. A measured length cannot
+    // reach here: the clamp above stops the read at it.
+    if framesRead > totalFrames { totalFrames = framesRead }
     buffer.frameLength = count
     return buffer
   }

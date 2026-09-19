@@ -107,6 +107,62 @@ final class GaplessTrimmingTests: XCTestCase {
     XCTAssertEqual(Double(total), Double(reader.totalFrames), accuracy: 64)
   }
 
+  // MARK: - And who is responsible for knowing where the end is
+
+  /**
+   The packet table answered, so the length is a count rather than a guess.
+
+   `kExtAudioFileProperty_FileLengthFrames` gives the same number whether Core
+   Audio counted the frames or extrapolated them from the opening seconds'
+   bitrate, and says nothing about which it did. The packet table is what
+   separates them: a container that can state its padding is one whose packets
+   have been accounted for. This file has both — `testTheFileDeclaresPadding…`
+   above is the same fact read from the other end — so `read` may treat the
+   length as the boundary it is, and does.
+
+   The reason this is worth its own test rather than being left implicit in
+   the one below: if the flag came back false for a file like this, the trim
+   would quietly stop happening and every lossy track would regain its
+   trailing block of silence. That is a bug this engine has already shipped
+   once, and the flag is now the thing standing between it and shipping again.
+   */
+  func testTheLengthOfAFileWithAPacketTableIsMeasured() throws {
+    let reader = try makeReader()
+    XCTAssertTrue(reader.lengthIsMeasured,
+                  "a file with a packet table was treated as though its length were extrapolated")
+  }
+
+  /**
+   A measured length is a ceiling, and decoding does not lift it.
+
+   `read` corrects `totalFrames` upward wherever the decoder proves a file
+   longer than its length claimed, which is what stops an extrapolated figure
+   going on being wrong for the rest of the track. That correction must be
+   unreachable here: the clamp stops the read at the counted length, so
+   nothing can ever be decoded past it, so the figure cannot move. If it does
+   move, the clamp is not being applied — and the frames it let through are
+   the encoder's padding, which is the seam.
+
+   Stated as an invariant rather than as a frame count because
+   `testReadingEndsWithTheMusic` already pins the count, and two tests that
+   fail together for two different reasons are worth more than one.
+   */
+  func testAMeasuredLengthIsNotMovedByDecodingPastIt() throws {
+    let reader = try makeReader()
+    let lengthAtOpen = reader.totalFrames
+
+    // Bounded the same way `testReadingEndsWithTheMusic` bounds its drain: a
+    // reader that will not end should fail this test, not hang the suite.
+    var total: Int64 = 0
+    while let buffer = try reader.read(frames: 4096) {
+      total += Int64(buffer.frameLength)
+      if total > lengthAtOpen + 8192 { break }
+    }
+
+    XCTAssertEqual(reader.totalFrames, lengthAtOpen,
+                   "the decoder ran past a counted length, which is the padding being let back in")
+  }
+
   func testSeekingToZeroLandsOnTheMusic() throws {
     let reader = try makeReader()
     _ = try reader.read(frames: 4096)

@@ -238,6 +238,73 @@ final class AudioFileReaderTests: XCTestCase {
     try reader.seek(toFrame: reader.totalFrames)
     XCTAssertNil(try reader.read(frames: 4096))
   }
+
+  // MARK: - A counted length and a guessed one are not the same number
+
+  /**
+   What the reported truncation actually was.
+
+   `kExtAudioFileProperty_FileLengthFrames` answers two different questions
+   with one number. Where the container carries a packet table — the MP4
+   family, an MP3 with a Xing/LAME header — every packet's frames have been
+   accounted for and the answer is a count. Where it does not, Core Audio
+   extrapolates from the leading frames' bitrate, and a VBR file that opens
+   louder than it averages comes back **short**. `read` stopped there anyway,
+   returned nil, and `TrackPlayback` had no way to read that as anything but
+   the file running out: the queue advanced and the listener heard a song skip
+   itself part-way through, over a connection with nothing wrong with it.
+
+   So the reader now separates the two, and these pin the separation. What
+   they cannot do is reproduce the shortfall: the format it was reported in is
+   MP3, Core Audio decodes MP3 and will not encode it, and there is no way to
+   build the fixture in process — the standing gap CONTRIBUTING names and
+   `docs/architecture.md` §12 records. Anyone who finds a way to get a small
+   VBR MP3 without a Xing header into the suite should drain it here and
+   assert it reaches its real end.
+
+   In the meantime what is checkable is the rule rather than the instance:
+   this container declares no packet table, so its length is not to be treated
+   as a boundary, and `GaplessTrimmingTests` asserts the other half — that a
+   container which does declare one still stops where the music does.
+   */
+  func testAContainerWithNoPacketTableDoesNotClaimAMeasuredLength() throws {
+    let (reader, _) = try read(try fixture(format: kAudioFormatLinearPCM, ext: "wav"))
+    XCTAssertFalse(reader.lengthIsMeasured,
+                   "a length with no packet table behind it was treated as a counted one")
+  }
+
+  /**
+   Lifting the clamp does not make a file run on past its end.
+
+   The obvious worry about deciding the end from the bytes rather than from a
+   declared length: a reader that no longer stops at a number has to stop
+   somewhere, and a decoder that keeps being asked after the audio is gone
+   would either spin or hand back silence. It does neither — `readProc`
+   already distinguishes an empty read at a length the source genuinely knows
+   from one before it, which is the decision this change hands the question
+   back to.
+
+   Uncompressed, so the two answers coincide exactly and any drift shows.
+   */
+  func testAnUnmeasuredFileStillEndsWhereItsBytesDo() throws {
+    let (reader, _) = try read(try fixture(format: kAudioFormatLinearPCM, ext: "wav"))
+    let lengthAtOpen = reader.totalFrames
+
+    var total: Int64 = 0
+    var reads = 0
+    while let buffer = try reader.read(frames: 4096) {
+      total += Int64(buffer.frameLength)
+      reads += 1
+      if reads > 4_000 { break }
+    }
+
+    XCTAssertEqual(total, Int(lengthAtOpen), accuracy: 4096)
+    XCTAssertLessThanOrEqual(reads, 4_000, "the reader did not stop when the audio did")
+    // And the length is still the length: the upward correction only fires
+    // where the decoder actually proves a file longer than it claimed, which
+    // for PCM it never can.
+    XCTAssertEqual(reader.totalFrames, lengthAtOpen)
+  }
 }
 
 private func XCTAssertEqual(

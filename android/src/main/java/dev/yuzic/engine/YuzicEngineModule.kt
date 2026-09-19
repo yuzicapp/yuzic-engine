@@ -1230,14 +1230,109 @@ class YuzicEngineModule : Module() {
   }
 
   /**
+   * Which track the truncation retries below belong to, and how many are left.
+   *
+   * Keyed on the track rather than cleared by whoever starts one, because
+   * every path that loads a track would then have to remember to clear it and
+   * one of them eventually would not. The id answers the question directly:
+   * a different track is a different budget.
+   */
+  private var truncationRetriesFor: String? = null
+  private var truncationRetries = 0
+
+  /**
+   * Whether an `ended` that just arrived landed a long way short of the song.
+   *
+   * The iOS engine has had this check since a transcoded stream was found
+   * ending tracks part-way through with nothing thrown anywhere, and Android
+   * had no equivalent at all — `handleTrackFinished` advanced on any
+   * `STATE_ENDED`, whatever it meant. Media3 is more robust than the iOS
+   * reader here and the fault is rarer, but it is not absent: a progressive
+   * response that stops early, or one served with a `Content-Length` shorter
+   * than the audio, reaches `ExoPlayer` as an input that ran out, and an input
+   * that ran out *is* the end of the media as far as the player is concerned.
+   * The queue then advances and the listener hears a song skip itself.
+   *
+   * Measured against the host's `durationSec` and nothing else, which is where
+   * this deliberately parts company with the Swift version. There the reader's
+   * own length is consulted as a second opinion on the ranged transport, since
+   * it comes from a container the reader parsed. Media3 has no counterpart:
+   * `player.duration` for a VBR MP3 with no Xing header is extrapolated from
+   * the first frame's bitrate by `ConstantBitrateSeeker`, so it is a guess of
+   * exactly the kind this check exists to disbelieve, and corroborating one
+   * guess with another proves nothing. The host's metadata is the one fact
+   * here that did not come out of the bytes.
+   *
+   * Main thread only — it reads the player.
+   */
+  private fun endedShortOfItsLength(player: ExoPlayer): Boolean {
+    val track = queue.activeTrack ?: return false
+    // A broadcast has no length to fall short of, and its `durationSec` is
+    // whatever the host happened to send.
+    if (track.continuous) return false
+    val declared = track.durationSec ?: return false
+    if (declared <= 0.0) return false
+    val position = player.currentPosition.coerceAtLeast(0) / 1000.0
+    return position < declared - TRUNCATION_TOLERANCE_SEC
+  }
+
+  /**
    * The active track reached its end without a fade having taken over.
    *
    * Asks the queue for what follows rather than adding one, so repeat is
    * honoured in the one place it has to be: `one` returns the same index and
    * the track starts again, `all` wraps instead of finishing.
+   *
+   * Unless it did not actually end — see [endedShortOfItsLength]. An end that
+   * arrived a long way before the end of the song is answered by preparing the
+   * same track again at the second it stopped, which on this platform is what
+   * reconnecting means: `loadActiveTrack` sets the media item afresh, so the
+   * data source opens a new request rather than resuming a response that has
+   * already finished. Bounded, because a server that keeps handing back the
+   * same short encode would otherwise be asked forever.
    */
   private fun handleTrackFinished() {
     if (transitioning) return
+
+    val player = PlaybackService.graph?.activeVoice?.player
+    if (player != null && endedShortOfItsLength(player)) {
+      val track = queue.activeTrack
+      if (truncationRetriesFor != track?.id) {
+        truncationRetriesFor = track?.id
+        truncationRetries = 0
+      }
+      if (truncationRetries < MAX_TRUNCATION_RETRIES) {
+        truncationRetries += 1
+        loadActiveTrack(positionMs = player.currentPosition.coerceAtLeast(0))
+        return
+      }
+      // Out of retries, and advancing now would be the silent skip this check
+      // exists to stop. Said out loud instead, the same way iOS says it.
+      val title = track?.title ?: "this track"
+      // Paused rather than left to sit with `playWhenReady` still true, so
+      // nothing resumes on the next route change and the host's transport
+      // controls describe something real.
+      //
+      // The state event is deliberately *not* forced alongside it. Media3 is
+      // in `STATE_ENDED` and `emitStateIfChanged` suppresses "ended" while a
+      // next track exists, so a host watching `onStateChange` alone learns
+      // less here than an iOS host does, which goes to `paused`. That is a
+      // genuine divergence and it belongs in §13 of `docs/architecture.md`
+      // rather than in a literal written at this call site: `Tools/parity.py`
+      // reads the state vocabulary from emission sites, and a word introduced
+      // here rather than in `stateName` reads to it as a state only one
+      // platform has. The error below is what a host acts on either way.
+      player.pause()
+      sendEvent(
+        "onError",
+        mapOf(
+          "code" to "PLAYBACK_FAILED",
+          "message" to "$title stopped before it ended",
+        ),
+      )
+      return
+    }
+
     val listened = listenedSeconds()
     val next = queue.nextIndex ?: return
     advanceTo(next, listened)
@@ -1293,6 +1388,25 @@ class YuzicEngineModule : Module() {
      * the 0.25s `PlaybackEngine` ticks at on iOS.
      */
     private const val TICK_INTERVAL_MS = 250L
+
+    /**
+     * How far short of the track's real length an `ended` may land before it is
+     * disbelieved. `PlaybackEngine.truncationToleranceSec`, to the second.
+     *
+     * Five is past anything an honest ending can disagree by — encoder padding
+     * is fractions of a second and the tag a host reads is rounded to whole
+     * ones — and far short of the shortfall a truncation produces, which is
+     * the rest of the song.
+     */
+    private const val TRUNCATION_TOLERANCE_SEC = 5.0
+
+    /**
+     * How many times a track that stopped short is prepared again before it is
+     * reported. `PlaybackEngine.maxStreamReconnects`, for the same reason it is
+     * three there: enough to ride out a server having a bad moment, few enough
+     * that one that is simply broken is named rather than retried forever.
+     */
+    private const val MAX_TRUNCATION_RETRIES = 3
   }
 }
 
