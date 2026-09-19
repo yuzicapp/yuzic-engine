@@ -191,16 +191,43 @@ final class UnderrunTests: XCTestCase {
     let reader = ShortReader(buffers: 3)
     let playback = TrackPlayback(reader: reader, voice: graph.activeVoice)
 
+    // Both counters are written from the decode queue and the node's
+    // completion handler, and read from here.
+    let state = NSLock()
     var underruns = 0
-    let finished = expectation(description: "track finished")
-    playback.onUnderrun = { underruns += 1 }
-    playback.onEndOfTrack = { finished.fulfill() }
+    var finished = false
+    playback.onUnderrun = { state.lock(); underruns += 1; state.unlock() }
+    playback.onEndOfTrack = { state.lock(); finished = true; state.unlock() }
 
     try playback.start(atFrame: 0)
-    _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames(atSampleRate: 44_100) * 5)
 
-    wait(for: [finished], timeout: 5)
-    XCTAssertEqual(underruns, 0,
+    // Rendered in slices, not in one call.
+    //
+    // `start` only *dispatches* the decode, so one large render can run before
+    // the first buffer is scheduled — and an offline graph plays nothing that
+    // arrives after the render it was asked for. The completions then never
+    // fire, the depth never drains, and the end of the track never comes. The
+    // three tests above are safe from this because they wait on the reader
+    // reaching its blocking read first, which proves buffers are already
+    // scheduled; this one had nothing to wait on and simply raced.
+    //
+    // The decode thread won that race on every machine it was tried on and
+    // lost it on CI, which is the only reason it was seen at all.
+    let deadline = Date().addingTimeInterval(10)
+    while Date() < deadline {
+      state.lock(); let done = finished; state.unlock()
+      if done { break }
+      _ = try graph.renderOffline(frames: TrackPlayback.bufferFrames(atSampleRate: 44_100))
+      usleep(1_000)
+    }
+
+    state.lock()
+    let reachedEnd = finished
+    let count = underruns
+    state.unlock()
+
+    XCTAssertTrue(reachedEnd, "the track never reported its end")
+    XCTAssertEqual(count, 0,
                    "a track that finished is not a track that ran out of audio")
   }
 
