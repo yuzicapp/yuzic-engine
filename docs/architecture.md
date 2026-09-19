@@ -568,7 +568,7 @@ config plugin's Info.plist scene entry lands only on a prebuild.
 Not a design decision — a record. The serious defects here have kept arriving in
 the same shape, and it is worth naming because it is not the shape most review
 looks for. Nothing below threw. Nothing below failed a test suite. Seven of the
-eleven are code that ran, returned, and accomplished nothing. Two are the same
+thirteen are code that ran, returned, and accomplished nothing. Two are the same
 idea one level up: one where what accomplished nothing was the handover, one
 where it was the API boundary. The tenth is a step further out again — code that
 was correct, and a *test* that ran, passed, and proved nothing, because it
@@ -576,6 +576,12 @@ exercised a different decoder from the one the fault lived in. The eleventh is
 further out still, and is the only one that is not about code at all: a fault
 nothing was watching, because the path it took was the one where everything
 succeeded.
+
+The twelfth and thirteenth are the inversion, and arrived together in the same
+symptom. They are not code that accomplished nothing: they are code that
+accomplished *something plausible and wrong*, and returned a value that cannot
+be told from the right one. That shape is worse, because the tests that catch
+the first eleven all ask whether the work happened.
 
 **A guard that guards nothing.** `remoteCommandsEnabled` re-registered the lock
 screen's targets only when the value changed. Correct in isolation; the previous
@@ -795,11 +801,59 @@ reverted: **a bound raised to suit the path that got faster has to be checked
 against the paths that did not.** The old value's stated reason — that the
 threshold has to be reachable — outlived the change that appeared to retire it.
 
-The common thread is that all of these are invisible to "does it return, and is
-the return value right". What catches them is asking what the code *did* — which
-call ran, which caller reached it, what the user then heard. `Tools/mutate.py`
-automates one slice of this: break a real behaviour, and see whether any test
-notices.
+**A key that names the wrong thing.** The twelfth. The disk cache was keyed on
+`MediaId`, and a `MediaId` names a *track* — but what the cache holds is a byte
+stream, and one track has as many of those as the server has ways to send it.
+Quality is the obvious one; a transcoder reconfigured server-side and a library
+rescan that rewrites tags are the two that do not look like a different stream
+at all, since the id is stable across both. `write` replaced the entry's length
+and kept the ranges filled at the old one, and `fetchWindow` asked for a range
+without saying at what length, so the cache had nothing to check against even
+where it wanted to. Windows from one stream were served into a decode of
+another. Every layer did its job: the fetch returned bytes, the cache returned
+bytes, the decoder was handed bytes. They were simply the wrong bytes, and the
+only thing downstream that could tell was the decoder producing zero frames —
+which this engine reads as a track ending. The cache persisted after every
+window and reloaded with no check beyond the audio file still existing, so a
+poisoned entry outlived every restart until eviction. It is keyed on the stream
+now, and entries from before the fix are deleted rather than adopted, because
+adopting one means trusting a length that records whichever stream wrote last.
+
+**A number that answers two questions.** The thirteenth, and the same symptom
+from the other end. `kExtAudioFileProperty_FileLengthFrames` is a frame count
+where the container carries a packet table and an extrapolation from the
+leading frames' bitrate where it does not, and it does not say which it just
+gave you. The reader clamped every read to it, so a VBR MP3 with no Xing header
+and a dense opening stopped mid-song and returned nil — a legal value, and the
+one that means the track is over.
+
+What makes it worth recording rather than fixing quietly is that the clamp
+looked load-bearing. It exists so encoder padding is not decoded as trailing
+silence, which is a real guarantee with a real test behind it, and the obvious
+reading is that you cannot have both. You can: a container that can state its
+priming and remainder is exactly one whose packets have been accounted for, so
+"is this length a count" and "is there padding to trim" are the same question
+asked twice. The clamp only ever did useful work on the files it now applies
+to. On the rest it trimmed nothing and discarded music.
+
+The same number reached the seek bound, so dragging to 2:50 of a track the
+parser guessed was 2:40 long landed at 2:40 and ended it — the same fault
+wearing a second face, and the one a user would have described as a different
+bug entirely.
+
+The common thread through the first eleven is that they are invisible to "does
+it return, and is the return value right". What catches them is asking what the
+code *did* — which call ran, which caller reached it, what the user then heard.
+`Tools/mutate.py` automates one slice of this: break a real behaviour, and see
+whether any test notices.
+
+The last two need the question asked the other way round, because the return
+value *was* right by every local test available: bytes of the length asked for,
+a nil at a frame count the file itself reported. What was wrong was the
+premise — which stream those bytes belonged to, which question that number had
+answered. Neither is reachable from inside the function that got it wrong, and
+that is the argument for the identity being carried in the key and in the
+reader's own flag rather than inferred at the point of use.
 
 ### The instrument is part of the system
 
@@ -879,6 +933,24 @@ Still true, and each is a decision rather than an oversight to fix blindly:
   three loader attempts, backoff capped at five seconds — where iOS now retries
   for a wall-clock budget with a visible buffering state. A handover iOS rides
   out still kills the track on Android.
+- **A track that stopped short leaves the players in different states.** Both
+  platforms now refuse to advance when playback ends before the host's declared
+  duration, and both report the same error in the same words. What they leave
+  behind differs: iOS moves to `paused`, Android stays in Media3's `ENDED`,
+  which `emitStateIfChanged` suppresses, so a host watching state alone sees
+  nothing move on Android.
+
+  This one is deliberate and the reason is worth keeping, because it looks like
+  an oversight. Writing `"paused"` at the Android veto site would close it in
+  one line — and fails `Tools/parity.py`, which reads the state vocabulary from
+  emission-site literals and so counts a literal written on one platform as a
+  state only that platform has. The check is right to: a state one side can
+  reach and the other cannot is exactly the divergence it exists to catch. It
+  cannot see that this particular literal would be *closing* a divergence
+  rather than opening one, which is the same blind spot §12's eleventh entry
+  is about — the tool measures the surface, and the surface is not the
+  behaviour. Closing it properly means Android reaching `paused` through the
+  path that already emits it, not asserting the word at a new site.
 
 ## What is not decided yet
 

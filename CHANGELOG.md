@@ -9,6 +9,63 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Fixed
+
+- **Tracks cut out part-way through and the player moved on as though they had
+  finished.** Two independent faults with one symptom, and neither threw
+  anything: this engine reports a finished track when a read comes back empty,
+  so anything that empties a read early is indistinguishable from an ending.
+
+  *The disk cache was keyed on the track.* A `MediaId` names a track, but what
+  the cache holds is a byte stream, and a track has as many of those as the
+  server has ways to send it — quality being the obvious one, a server-side
+  transcoder change and a library rescan that rewrites tags being the two that
+  keep the id stable while every byte after the tag moves. Ranges filled at one
+  length survived a write at another, and reads asked for a range without
+  saying at what length, so windows from one stream were decoded as another.
+  The cache is keyed on the stream now. Entries written before this are deleted
+  at first launch rather than adopted: a pre-fix entry records whichever stream
+  wrote last against ranges that may have come from several, so adopting one
+  carries the fault through the upgrade into exactly the tracks that were
+  already breaking. It costs one refetch.
+
+  *And the reader stopped at a guess.* `kExtAudioFileProperty_FileLengthFrames`
+  is a frame count where the container carries a packet table and an
+  extrapolation from the opening bitrate where it does not. Every read was
+  clamped to it, so a VBR MP3 with no Xing header and a dense opening ran out
+  of music before it ran out of file. The clamp is there to keep encoder
+  padding from being decoded as trailing silence, which looked like a reason it
+  could not be touched — but a container that can state its priming and
+  remainder is the same set whose length is counted, so the clamp now applies
+  exactly where it always did useful work and nowhere else. Gapless playback is
+  byte-for-byte unchanged.
+
+- **Seeking past the guessed length ended the track.** The same number bounded
+  seeks, so dragging to 2:50 of a track the parser had guessed was 2:40 long
+  landed at 2:40 and finished it.
+
+- **A truncated track no longer advances silently on either platform.** iOS
+  already refused to advance when playback ended short of the host's declared
+  duration, but excluded the ranged transport on the grounds that its end
+  "really is the end" — true of the bytes, and irrelevant to a reader that
+  stopped before reaching them. It now asks the reader for a second opinion
+  instead. Android had no such check at all; it re-prepares at the second
+  reached, up to three times, before reporting the failure in the same words
+  iOS uses.
+
+### Changed
+
+- **iOS sources compile for the simulator again.** `CFLAC` force-included its
+  config through a path relative to the package root, which `swift build`
+  resolves and `xcodebuild` does not, so an iOS-destination build failed on the
+  first target in the graph and never reached the rest. Because `swift test`
+  builds for the host, that left every `#if os(iOS)` branch — the audio-session
+  interruption, route-change and media-services-reset handlers among them —
+  compiled by nothing. No API change; it is a build-configuration fix recorded
+  here because of what it was hiding.
+
 ## [1.0.12]
 
 ### Added
