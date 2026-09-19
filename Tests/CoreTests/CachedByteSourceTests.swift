@@ -30,11 +30,17 @@ final class FakeFetcher: ByteFetcher, @unchecked Sendable {
   /// tests need fixtures of a few megabytes to have anything to read ahead
   /// *into*, and per-byte subscripting on `Data` takes seconds at that size —
   /// which is how a suite stops being run.
-  init(bytes: Int) {
+  ///
+  /// `seed` shifts the pattern so two fetchers can stand for two *different*
+  /// encodings of one track rather than two copies of the same bytes. Without
+  /// it every fixture shares a prefix, and a test asking whether the right
+  /// audio came back could not tell — which is the exact confusion the cache
+  /// was making in the field.
+  init(bytes: Int, seed: Int = 0) {
     var data = Data(count: bytes)
     data.withUnsafeMutableBytes { raw in
       guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return }
-      for index in 0..<bytes { base[index] = UInt8(index % 251) }
+      for index in 0..<bytes { base[index] = UInt8((index &+ seed) % 251) }
     }
     blob = data
   }
@@ -294,5 +300,80 @@ final class CachedByteSourceDiskTests: XCTestCase {
     let cold = CachedByteSource(fetcher: second, windowBytes: 64 * 1024, cache: cache, cacheId: "track-1")
     _ = try cold.read(offset: 0, count: 512)
     XCTAssertFalse(second.fetched.isEmpty, "evict did not actually remove the audio")
+  }
+
+  /**
+   The same id, twice, over two different byte streams — and the whole fault,
+   end to end, from this side of it.
+
+   yuzic asks for Original on WiFi and 192kbps on cellular, and the id does not
+   change between them. `fetchWindow` prefers disk to network, so for as long
+   as the entry was keyed on the id alone, the cellular play's first window was
+   whatever the WiFi play had already downloaded: FLAC bytes handed to a decode
+   of an mp3. Nothing fails at this layer — the read succeeds and returns bytes
+   — which is why it surfaced three layers up as a track ending in the middle
+   with the queue moving cheerfully on.
+
+   Two assertions, because only one of them names the harm. That the source
+   went to the network is how the fix works; that the bytes are the ones this
+   stream is made of is what the listener hears.
+   */
+  func testASecondEncodingOfTheSameTrackIsNotServedTheFirstsBytes() throws {
+    let cache = try DiskCache(directory: directory)
+
+    let lossless = FakeFetcher(bytes: 500_000)
+    let onWifi = CachedByteSource(
+      fetcher: lossless, windowBytes: 64 * 1024, cache: cache, cacheId: "track-1"
+    )
+    _ = try onWifi.read(offset: 0, count: 1024)
+    XCTAssertFalse(lossless.fetched.isEmpty, "the first play has to fetch something")
+
+    // Same track, same id, a shorter stream of different bytes.
+    let transcode = FakeFetcher(bytes: 120_000, seed: 7)
+    let onCellular = CachedByteSource(
+      fetcher: transcode, windowBytes: 64 * 1024, cache: cache, cacheId: "track-1"
+    )
+    let served = try onCellular.read(offset: 0, count: 1024)
+
+    XCTAssertFalse(transcode.fetched.isEmpty,
+                   "took the other encoding's window off disk instead of fetching its own")
+    XCTAssertEqual(served, transcode.blob.subdata(in: 0..<1024),
+                   "the decoder was handed audio from a stream it is not parsing")
+  }
+
+  /**
+   And the first encoding is still there afterwards.
+
+   Discarding the entry whenever the length changed would have closed the fault
+   too, and it would have made the cache useless for the case it most has to
+   serve: the quality setting is per-network, so leaving the house and coming
+   back would empty and refill the cache on every trip. Two entries, and the
+   LRU decides. This is the test that fails if that choice is ever quietly
+   reversed.
+   */
+  func testCachingTheSecondEncodingDoesNotCostTheFirst() throws {
+    let cache = try DiskCache(directory: directory)
+
+    let lossless = FakeFetcher(bytes: 500_000)
+    let onWifi = CachedByteSource(
+      fetcher: lossless, windowBytes: 64 * 1024, cache: cache, cacheId: "track-1"
+    )
+    _ = try onWifi.read(offset: 0, count: 1024)
+
+    let transcode = FakeFetcher(bytes: 120_000, seed: 7)
+    let onCellular = CachedByteSource(
+      fetcher: transcode, windowBytes: 64 * 1024, cache: cache, cacheId: "track-1"
+    )
+    _ = try onCellular.read(offset: 0, count: 1024)
+
+    // Home again, Original quality, a fresh source over the lossless stream.
+    let again = FakeFetcher(bytes: 500_000)
+    let backOnWifi = CachedByteSource(
+      fetcher: again, windowBytes: 64 * 1024, cache: cache, cacheId: "track-1"
+    )
+    let served = try backOnWifi.read(offset: 0, count: 1024)
+
+    XCTAssertTrue(again.fetched.isEmpty, "the cellular play threw away the lossless cache")
+    XCTAssertEqual(served, lossless.blob.subdata(in: 0..<1024))
   }
 }

@@ -56,6 +56,23 @@ public final class HTTPTrackReaderFactory: TrackReaderFactory {
    and its bytes are not the file: two plays at different bitrates are
    different audio under the same id, and storing either as *the* cached copy
    would serve the wrong one back.
+
+   **That last sentence was right and the conclusion drawn from it was not.**
+   Keeping the sequential transport out of the cache was read as settling the
+   matter, as though "different audio under the same id" could only arrive
+   that way. It arrives by the ranged path just as readily. Which transport a
+   request gets is decided by the *server's answer* rather than by what was
+   asked for — `makeSource`'s probe takes the ranged path whenever a length
+   and a 206 come back — and plenty of servers answer a `format`/`maxBitRate`
+   request exactly that way, out of a transcode they have already finished and
+   cached. Add a library rescan that rewrites a file's tags, or a change to
+   the server's own encoder settings, and the ranged path serves a second byte
+   stream under the first one's id with no quality setting involved at all. So
+   the ranged path needs
+   the same distinction drawn inside it, and `DiskCache.CacheKey` is where it
+   is drawn: an entry is filed under the id and the length that stream
+   declared, and a read at a different length misses rather than lying. The
+   fault that made this worth writing down is in `DiskCache`'s class comment.
    */
   private let cache: DiskCache?
 

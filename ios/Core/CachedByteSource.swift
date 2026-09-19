@@ -137,6 +137,16 @@ public final class CachedByteSource {
 
    `cacheId` is the host's `MediaId` rather than the URL, for the reason
    `DiskCache` gives: stream URLs carry a rotating token.
+
+   It is not the whole key, though, and this class supplies the other half
+   without holding it: every call below passes `total` — the length this
+   source's own fetcher declared — and `DiskCache` files the entry under the
+   pair. That is deliberate rather than incidental. A source is built around
+   one fetcher pointed at one URL and reads its length once, so `total` is
+   fixed for the life of the source and cannot be the length of some other
+   encoding; taking it straight from the same variable the read is being
+   served against is what makes it impossible for this class to store bytes
+   under a length they did not come from.
    */
   private let cache: DiskCache?
   private let cacheId: MediaId?
@@ -422,8 +432,15 @@ public final class CachedByteSource {
     // rather than a request, which is the entire point of the cache — and it
     // is checked per window rather than per track so a half-fetched track
     // resumes from wherever it got to.
+    //
+    // Asked for by length as well as by id, because "disk before network" was
+    // true of the wrong disk for a while: the same id is a lossless file on
+    // WiFi and a transcode on cellular, and a window cached from one was being
+    // spliced into a decode of the other. The cache answers nil to a length it
+    // was not filled at, which turns that into a miss and a request. See
+    // `DiskCache.CacheKey`.
     let data: Data
-    if let cache, let cacheId, let onDisk = cache.read(cacheId, range: toFetch) {
+    if let cache, let cacheId, let onDisk = cache.read(cacheId, range: toFetch, totalBytes: total) {
       data = onDisk
     } else {
       do {
