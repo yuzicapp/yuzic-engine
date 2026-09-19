@@ -79,11 +79,24 @@ let package = Package(
         .headerSearchPath("src"),
         // And its public ones as <FLAC/format.h>.
         .headerSearchPath("include"),
+        // And the forced config by bare name, found through this target's own
+        // directory — the same way opus reaches its public headers below.
+        //
+        // It was spelled as a path from the package root, which `swift build`
+        // resolves and `xcodebuild` does not: the two run from different
+        // working directories, so an iOS-simulator build died with
+        // "'ios/Vendor/flac/yuzic-flac-config.h' file not found" while the
+        // macOS test build was fine. That is why nothing compiled the
+        // `#if os(iOS)` branches — CFLAC failed first and the build never
+        // reached them. `.headerSearchPath` is target-relative and SwiftPM
+        // makes it absolute per driver, so a bare `-include` finds the header
+        // whichever one is building.
+        .headerSearchPath("."),
         // Force-included rather than reached through HAVE_CONFIG_H, for the
         // reason spelled out in `yuzic-flac-config.h` and already learned from
         // libopus: that flag applies to every file in the target, React
         // Native's C++ included, where it changes unrelated headers' branches.
-        .unsafeFlags(["-include", "ios/Vendor/flac/yuzic-flac-config.h"]),
+        .unsafeFlags(["-include", "yuzic-flac-config.h"]),
       ]
     ),
     .target(
