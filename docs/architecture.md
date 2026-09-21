@@ -915,6 +915,26 @@ tell: a parsing or decoding failure evicts the failed track's entry before the
 error is reported (`failureMeansBadBytes`), and a network failure does not,
 because the cached bytes are what lets a track play again offline.
 
+**A guard that matched nothing to nothing.** The fifteenth, iOS. Every
+playback callback hops to the main queue and then checks it still belongs to
+the playback in charge: `activePlayback === playback`, with `playback`
+captured weakly. When the playback has been released and nothing is loaded,
+both sides are nil, and `nil === nil` is true. So a first-buffer callback from
+a track that was already gone set `.playing` while the next track was still
+opening: no playback, no reader, the graph stopped, and the lock screen and
+the car told a track was playing.
+
+It had always been possible and almost never happened, because the old
+playback outlived a skip until the new track began, and a live object makes
+the comparison a real one. Making a skip let go of the old playback at once,
+so that its position and length stopped reaching the lock screen, held the
+window open for the whole of the next track's open. An isolated
+`testASkipWhileInterruptedStartsTheNextTrack` went from failing 1 run in 60
+to 18 in 60, always on the one assertion that looks at the graph, and a probe
+before the guard showed the passing and failing runs both reporting a match:
+one because the playbacks were the same, the other because neither existed.
+`isSame(_:as:)` now says nothing is not a match.
+
 ### The instrument is part of the system
 
 Four times the measurement was the fault and the code was fine, and each nearly

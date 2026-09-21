@@ -1033,6 +1033,27 @@ final class PlaybackEngineTests: XCTestCase {
     XCTAssertEqual(factory.opened, ["a", "b"])
   }
 
+  // MARK: - Callbacks from a playback that is gone
+
+  /**
+   A released playback and an empty engine are not the same playback.
+
+   The callbacks guard on this after hopping to the main queue, by which time
+   the playback they captured weakly may be gone. `===` on two nils is true, so
+   a first-buffer callback from a dead track set `.playing` over a next track
+   still opening, with the graph stopped: 30% of isolated runs of
+   `InterruptionRecoveryTests.testASkipWhileInterruptedStartsTheNextTrack`
+   once a skip released the old playback at once.
+   */
+  func testNothingIsNotTheCurrentPlayback() {
+    let a = NSObject(), b = NSObject()
+    XCTAssertFalse(PlaybackEngine.isSame(nil, as: nil), "a dead playback matched an empty engine")
+    XCTAssertFalse(PlaybackEngine.isSame(nil, as: a))
+    XCTAssertFalse(PlaybackEngine.isSame(a, as: nil))
+    XCTAssertFalse(PlaybackEngine.isSame(a, as: b))
+    XCTAssertTrue(PlaybackEngine.isSame(a, as: a))
+  }
+
   // MARK: - What the lock screen and the car are told while a track opens
 
   private func makeEngineReportingNowPlaying() throws -> (PlaybackEngine, FixtureFactory, NowPlayingCenter) {

@@ -23,6 +23,12 @@ behaviour does not.
 - **iOS: a skip was published with the old track's position and length.** The
   outgoing reader and playback stayed attached until the new track began. They
   are dropped before the lock screen is told.
+- **iOS: a callback from a playback that was already gone could report
+  playing.** Each playback callback checks it belongs to the current
+  playback with `===`, which is true when both are nil, so a first-buffer
+  callback from a released track set `.playing` while the next track was
+  still opening, with nothing loaded and the audio graph stopped. Two nils no
+  longer match.
 - **iOS: buffering was drawn as paused.** `playbackState` is now `.playing`
   while buffering, with the rate at zero, so the car shows pause rather than a
   play button that would open the track again.

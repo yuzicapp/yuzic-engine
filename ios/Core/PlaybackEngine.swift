@@ -714,7 +714,7 @@ public final class PlaybackEngine {
     wire(fresh)
     fresh.onFirstBufferScheduled = { [weak self, weak fresh] in
       DispatchQueue.main.async {
-        guard let self, self.activePlayback === fresh, self.state == .buffering else { return }
+        guard let self, self.isCurrent(fresh), self.state == .buffering else { return }
         self.state = .playing
         self.publishNowPlaying()
       }
@@ -1058,6 +1058,28 @@ public final class PlaybackEngine {
   }
 
   /**
+   Whether a callback's playback is the one playing now.
+
+   Every callback captures its playback weakly and asks this on the main
+   queue, after the fact. It used to be `activePlayback === playback`, which is
+   true when both are nil: a playback that has been released and an engine
+   with nothing loaded. So a first-buffer callback from a track that was
+   already gone set `.playing` while the next track was still opening, with no
+   playback, no reader and the graph stopped, and the lock screen and the car
+   were told a track was playing that was not. It hid for as long as the old
+   playback outlived the skip; once a skip let go of it straight away, the
+   window was the whole of the next track's open. Nothing is not a match.
+   */
+  static func isSame(_ playback: AnyObject?, as active: AnyObject?) -> Bool {
+    guard let playback, let active else { return false }
+    return playback === active
+  }
+
+  private func isCurrent(_ playback: TrackPlayback?) -> Bool {
+    Self.isSame(playback, as: activePlayback)
+  }
+
+  /**
    Wire the callbacks every playback needs.
 
    Here rather than at each of the three sites that make one, because the
@@ -1088,7 +1110,7 @@ public final class PlaybackEngine {
      */
     playback.onReadStalled = { [weak self, weak playback] in
       DispatchQueue.main.async {
-        guard let self, self.activePlayback === playback else { return }
+        guard let self, self.isCurrent(playback) else { return }
         // Outside the state guard below, for the same reason the budget reset
         // in `onReadResumed` is: reads being in the ladder is a fact about the
         // connection rather than about what the interface happens to be
@@ -1102,7 +1124,7 @@ public final class PlaybackEngine {
     }
     playback.onReadResumed = { [weak self, weak playback] in
       DispatchQueue.main.async {
-        guard let self, self.activePlayback === playback else { return }
+        guard let self, self.isCurrent(playback) else { return }
         // Reads are flowing again, so whatever outage was being counted is
         // over and the next one starts with a full budget. Outside the state
         // guard below deliberately: the budget belongs to the outage, not to
@@ -1132,7 +1154,7 @@ public final class PlaybackEngine {
      */
     playback.onUnderrun = { [weak self, weak playback] in
       DispatchQueue.main.async {
-        guard let self, self.activePlayback === playback else { return }
+        guard let self, self.isCurrent(playback) else { return }
         self.underrunning = true
         self.underrunSince = self.now()
         self.underrunsThisTrack += 1
@@ -1159,7 +1181,7 @@ public final class PlaybackEngine {
         // engine has moved on. Without the check it would find `.buffering`
         // put up by the reconnection that replaced it, conclude the drought
         // was over and say `playing` over a track that is being re-opened.
-        guard let self, self.activePlayback === playback, self.underrunning else { return }
+        guard let self, self.isCurrent(playback), self.underrunning else { return }
         // Bumped whether or not anything was announced: this is what stops a
         // pending announcement from landing on a drought that is already over.
         self.underrunToken &+= 1
@@ -1185,7 +1207,7 @@ public final class PlaybackEngine {
     // like the song skipping part-way through.
     playback.onReadFailed = { [weak self, weak playback] error in
       DispatchQueue.main.async {
-        guard let self, self.activePlayback === playback else { return }
+        guard let self, self.isCurrent(playback) else { return }
         // A sequential stream gets one more thing tried before the track is
         // declared lost — see `reconnectStream`. Every other transport has
         // already exhausted its retries by the time this fires.
@@ -1281,7 +1303,7 @@ public final class PlaybackEngine {
         self.activePlayback = playback
         playback.onFirstBufferScheduled = { [weak self, weak playback] in
           DispatchQueue.main.async {
-            guard let self, self.activePlayback === playback,
+            guard let self, self.isCurrent(playback),
                   self.state == .buffering else { return }
             self.state = .playing
             self.publishNowPlaying()
@@ -1622,7 +1644,7 @@ public final class PlaybackEngine {
     // buffer is handed to the node makes the state mean what it says.
     playback.onFirstBufferScheduled = { [weak self, weak playback] in
       DispatchQueue.main.async {
-        guard let self, self.activePlayback === playback, self.state == .buffering else { return }
+        guard let self, self.isCurrent(playback), self.state == .buffering else { return }
         self.state = .playing
         self.publishNowPlaying()
       }
