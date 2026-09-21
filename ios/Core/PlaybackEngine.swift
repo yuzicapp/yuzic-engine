@@ -462,9 +462,37 @@ public final class PlaybackEngine {
    as it is repeatedly yanked back to a value already going stale.
    */
   private func publishNowPlaying() {
-    guard let track = queue.activeTrack, let reader = activeReader else {
+    guard let track = queue.activeTrack else {
       nowPlaying.clear()
       publishedPosition = nil
+      return
+    }
+    guard let reader = activeReader else {
+      // A track that is still opening has no reader to ask for a position or
+      // a length, and this used to publish nothing until it had one. A car
+      // selection is `setQueue` and `play`, neither of which touches the lock
+      // screen, so for the whole open the car went on showing the track
+      // before it, paused where it was left. Say what was asked for now:
+      // from the top, with the length the host declared.
+      guard state == .buffering else {
+        nowPlaying.clear()
+        publishedPosition = nil
+        return
+      }
+      publishedPosition = nil
+      nowPlaying.update(
+        .init(
+          title: track.title,
+          artist: track.artist,
+          album: track.album,
+          durationSec: track.continuous ? 0 : (track.durationSec ?? 0),
+          positionSec: 0,
+          isBuffering: true,
+          isLive: track.continuous
+        ),
+        artworkUri: track.artworkUri,
+        artworkHeaders: track.artworkHeaders
+      )
       return
     }
     let sampleRate = reader.sampleRate > 0 ? reader.sampleRate : 44_100
@@ -479,6 +507,7 @@ public final class PlaybackEngine {
         durationSec: trustedDuration,
         positionSec: position,
         isPlaying: state == .playing,
+        isBuffering: state == .buffering,
         rate: 1.0,
         isLive: track.continuous
       ),
@@ -1396,23 +1425,6 @@ public final class PlaybackEngine {
     queue.set(queue.tracks, startIndex: index)
     state = .buffering
     emit(.trackChanged(index: index, id: track.id, previousListenedSec: listened))
-    publishNowPlaying()
-
-    // Already open? Then this is instant, which is the whole point of
-    // preloading: most skips go to the next track, and the next track is the
-    // one that was fetched ahead.
-    if let prepared = preparedNext, prepared.id == track.id {
-      preparedNext = nil
-      graph.cut(graph.activeVoice, to: 0)
-      activePlayback?.stop()
-      do {
-        try beginTrack(at: index, fromFrame: 0, prepared: prepared.reader, announced: true)
-      } catch {
-        state = .paused
-        emit(.failed("Could not play \(track.title): \(error)"))
-      }
-      return
-    }
 
     // The outgoing track stops now. Keeping it audible until the replacement
     // was ready avoided dead air, but it also meant pressing skip and hearing
@@ -1422,8 +1434,29 @@ public final class PlaybackEngine {
     //
     // A skip is a cut, not a fade — `transitionDuration` says so, and here it
     // is honoured by not starting one at all.
+    //
+    // Its playback and reader go with it, before the lock screen is told.
+    // They used to stay until the new track began, so the new title was
+    // published with the old track's position and length.
     graph.cut(graph.activeVoice, to: 0)
     activePlayback?.stop()
+    activePlayback = nil
+    activeReader = nil
+    publishNowPlaying()
+
+    // Already open? Then this is instant, which is the whole point of
+    // preloading: most skips go to the next track, and the next track is the
+    // one that was fetched ahead.
+    if let prepared = preparedNext, prepared.id == track.id {
+      preparedNext = nil
+      do {
+        try beginTrack(at: index, fromFrame: 0, prepared: prepared.reader, announced: true)
+      } catch {
+        state = .paused
+        emit(.failed("Could not play \(track.title): \(error)"))
+      }
+      return
+    }
 
     // The fetch itself stays off the main thread. It runs there once and the
     // interface froze for its whole length, on every skip and at the start of
@@ -1482,6 +1515,19 @@ public final class PlaybackEngine {
     // with a crossfade set begins a fade past the track being opened.
     // `beginTrack` starts the ticker again.
     stopTicking()
+
+    // Tell the lock screen and the car now, not when the open finishes. This
+    // is the path a car selection and the ordinary advance both take, and it
+    // published nothing until the reader was open: the car showed the track
+    // before, paused, or on an advance the finished track with its clock still
+    // running. From the top, the reader and playback still attached belong to
+    // the track before, and this opens a fresh reader whatever happens, so
+    // they go first. Further in, they are this track's, and give the position.
+    if frame == 0 {
+      activePlayback = nil
+      activeReader = nil
+    }
+    publishNowPlaying()
 
     if frame == 0, let prepared = preparedNext, prepared.id == track.id {
       preparedNext = nil

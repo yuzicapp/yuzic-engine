@@ -12,13 +12,14 @@ import MediaPlayer
 final class NowPlayingTests: XCTestCase {
 
   private func snapshot(
-    isPlaying: Bool = true, durationSec: Double = 240, positionSec: Double = 30,
+    isPlaying: Bool = true, isBuffering: Bool = false,
+    durationSec: Double = 240, positionSec: Double = 30,
     rate: Double = 1.0, isLive: Bool = false, artist: String? = "Boards of Canada"
   ) -> NowPlayingInfo.Snapshot {
     .init(
       title: "Roygbiv", artist: artist, album: "Music Has the Right to Children",
       durationSec: durationSec, positionSec: positionSec,
-      isPlaying: isPlaying, rate: rate, isLive: isLive)
+      isPlaying: isPlaying, isBuffering: isBuffering, rate: rate, isLive: isLive)
   }
 
   // MARK: - The lock screen's fix point
@@ -185,5 +186,20 @@ final class NowPlayingTests: XCTestCase {
     // iOS extrapolates from this fix point using the rate, so it has to be the
     // real position at the moment of the update rather than a rounded one.
     XCTAssertEqual(info[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double, 123.456)
+  }
+
+  func testBufferingIsDrawnAsPlayingWithTheClockStopped() {
+    // A track picked in the car and still opening. Drawn as paused, the car
+    // put a play button over it, and pressing that opened it again.
+    let opening = snapshot(isPlaying: false, isBuffering: true)
+    XCTAssertEqual(NowPlayingInfo.playbackState(for: opening), .playing)
+    let info = NowPlayingInfo.build(from: opening)
+    XCTAssertEqual(info[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 0.0,
+                   "nothing is playing yet, so the clock must not run")
+  }
+
+  func testPausedIsDrawnAsPaused() {
+    XCTAssertEqual(NowPlayingInfo.playbackState(for: snapshot(isPlaying: false)), .paused)
+    XCTAssertEqual(NowPlayingInfo.playbackState(for: snapshot(isPlaying: true)), .playing)
   }
 }

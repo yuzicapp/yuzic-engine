@@ -1033,6 +1033,98 @@ final class PlaybackEngineTests: XCTestCase {
     XCTAssertEqual(factory.opened, ["a", "b"])
   }
 
+  // MARK: - What the lock screen and the car are told while a track opens
+
+  private func makeEngineReportingNowPlaying() throws -> (PlaybackEngine, FixtureFactory, NowPlayingCenter) {
+    let fixture = try EncodedFixture.wav(seconds: 3)
+    let factory = FixtureFactory(data: fixture.data)
+    let graph = AudioGraph(sampleRate: 44_100)
+    try graph.startOffline(sampleRate: 44_100)
+    let center = NowPlayingCenter()
+    return (PlaybackEngine(graph: graph, factory: factory, nowPlaying: center), factory, center)
+  }
+
+  /**
+   A track picked in the car, shown as soon as it is picked.
+
+   A car selection is `setQueue` and `play`. Neither published anything, and
+   `startTrack` did not either until the reader was open, so for the length of
+   the open CarPlay showed the track before: its title, its position, and a
+   play button, because it had been paused. Seen on the simulator as about two
+   seconds of the wrong song over the right one's audio starting.
+   */
+  func testACarSelectionIsShownWhileItOpens() throws {
+    let (engine, _, center) = try makeEngineReportingNowPlaying()
+    engine.setQueue([song("a")], startIndex: 0)
+    try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
+    engine.pause()
+
+    engine.setQueue([song("b", durationSec: 7)], startIndex: 0)
+    try engine.play()
+
+    // The open lands on a later turn of the runloop, so this is the window.
+    let shown = try XCTUnwrap(center.lastPublished, "nothing was published while b opened")
+    XCTAssertEqual(shown.title, "b", "the car went on showing the track before")
+    XCTAssertEqual(shown.positionSec, 0)
+    XCTAssertEqual(shown.durationSec, 7, "the host's length is all there is until the reader opens")
+    XCTAssertEqual(NowPlayingInfo.playbackState(for: shown), .playing,
+                   "a play button over a track that is opening invites a second open")
+  }
+
+  /**
+   A skip published the new title with the old track's numbers.
+
+   `move` announced the new track at once, as it should, but the old reader
+   and playback were still attached, so the position and length were the
+   outgoing track's until the new one began.
+   */
+  func testASkipIsNotShownWithTheOldTracksLength() throws {
+    let (engine, _, center) = try makeEngineReportingNowPlaying()
+    engine.setQueue([song("a"), song("b", durationSec: nil)], startIndex: 0)
+    try engine.play()
+    settle { engine.activePlaybackIsWiredForTesting }
+    engine.discardPreloadForTesting()
+
+    try engine.skipToNext()
+
+    let shown = try XCTUnwrap(center.lastPublished)
+    XCTAssertEqual(shown.title, "b")
+    XCTAssertEqual(shown.durationSec, 0, "b's length is not known until it opens; a's 3s stood in for it")
+    XCTAssertEqual(shown.positionSec, 0)
+  }
+
+  /**
+   The ordinary advance, on a link too slow to have preloaded.
+
+   Same gap as the car selection, from the other caller of `startTrack`: the
+   finished track stayed on the lock screen, at a playing rate, with its clock
+   running on past its end.
+   */
+  func testAnAdvanceWithNothingPreloadedIsShownWhileItOpens() throws {
+    let (engine, factory, center) = try makeEngineReportingNowPlaying()
+    engine.setQueue([song("a"), song("b", durationSec: 7)], startIndex: 0)
+    try engine.play()
+    settle(timeout: 5) { engine.isNextPreloaded }
+    engine.discardPreloadForTesting()
+
+    let release = DispatchSemaphore(value: 0)
+    factory.onMakeReader = { id in
+      guard id == "b" else { return }
+      _ = release.wait(timeout: .now() + 10)
+    }
+    defer { release.signal() }
+
+    engine.finishActiveTrackForTesting()
+    settle { engine.queue.activeIndex == 1 }
+
+    let shown = try XCTUnwrap(center.lastPublished)
+    XCTAssertEqual(shown.title, "b", "the finished track stayed up while the next one opened")
+    XCTAssertEqual(shown.positionSec, 0)
+    XCTAssertEqual(shown.durationSec, 7)
+    XCTAssertEqual(NowPlayingInfo.playbackState(for: shown), .playing)
+  }
+
   func testSkippingPastTheEndFinishesRatherThanCrashing() throws {
     let (engine, _, _) = try makeEngine()
     engine.setQueue([song("a")], startIndex: 0)

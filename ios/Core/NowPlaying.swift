@@ -27,6 +27,9 @@ public struct NowPlayingInfo {
     public let durationSec: Double
     public let positionSec: Double
     public let isPlaying: Bool
+    /// Waiting for audio it means to play: a track still opening, or a stall.
+    /// The clock stands still, but the intent is playing, not paused.
+    public let isBuffering: Bool
     public let rate: Double
     /// Live radio: no finish line, so no duration and no scrubber.
     public let isLive: Bool
@@ -34,7 +37,8 @@ public struct NowPlayingInfo {
     public init(
       title: String, artist: String? = nil, album: String? = nil,
       durationSec: Double = 0, positionSec: Double = 0,
-      isPlaying: Bool = false, rate: Double = 1.0, isLive: Bool = false
+      isPlaying: Bool = false, isBuffering: Bool = false,
+      rate: Double = 1.0, isLive: Bool = false
     ) {
       self.title = title
       self.artist = artist
@@ -42,6 +46,7 @@ public struct NowPlayingInfo {
       self.durationSec = durationSec
       self.positionSec = positionSec
       self.isPlaying = isPlaying
+      self.isBuffering = isBuffering
       self.rate = rate
       self.isLive = isLive
     }
@@ -82,6 +87,18 @@ public struct NowPlayingInfo {
     }
 
     return info
+  }
+
+  /**
+   The state the car and the lock screen draw their button from.
+
+   Buffering counts as playing. The rate is already zero, so the clock stops,
+   but a track picked in the car and still opening is one the listener asked
+   to hear. Drawn as paused, it put a play button over it, and pressing that
+   opened the track again.
+   */
+  public static func playbackState(for snapshot: Snapshot) -> MPNowPlayingPlaybackState {
+    snapshot.isPlaying || snapshot.isBuffering ? .playing : .paused
   }
 }
 
@@ -143,6 +160,10 @@ public final class NowPlayingCenter {
   private var artworkRequest: ArtworkRequest?
   private var handlers = RemoteCommandHandlers()
 
+  /// What was last handed to the system, or nil after `clear`. Kept so the
+  /// engine's publishing can be tested without an app to read it back from.
+  public private(set) var lastPublished: NowPlayingInfo.Snapshot?
+
   public init() {}
 
   public func update(
@@ -157,9 +178,10 @@ public final class NowPlayingCenter {
       info[MPMediaItemPropertyArtwork] = existing
     }
     center.nowPlayingInfo = info
+    lastPublished = snapshot
 
     // Stated, never inferred. This is the CarPlay bug.
-    center.playbackState = snapshot.isPlaying ? .playing : .paused
+    center.playbackState = NowPlayingInfo.playbackState(for: snapshot)
 
     switch artworkAction(for: artworkUri, headers: artworkHeaders, currentlyLoaded: artworkRequest) {
     case .keep:
@@ -192,6 +214,7 @@ public final class NowPlayingCenter {
     center.nowPlayingInfo = nil
     center.playbackState = .stopped
     artworkRequest = nil
+    lastPublished = nil
   }
 
   private func loadArtwork(_ artwork: ArtworkRequest) {

@@ -9,6 +9,26 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Fixed
+
+- **iOS: a track picked in CarPlay showed the previous one while it
+  opened.** A car selection is `setQueue` and `play`, and nothing was
+  published until the new track's reader was open, so for about two seconds
+  CarPlay and the lock screen showed the track before, paused, over the new
+  one's audio starting. The ordinary advance had the same gap when nothing was
+  preloaded, with the finished track's clock running on past its end. Both now
+  publish the new track at once, from the top with the host's length.
+- **iOS: a skip was published with the old track's position and length.** The
+  outgoing reader and playback stayed attached until the new track began. They
+  are dropped before the lock screen is told.
+- **iOS: buffering was drawn as paused.** `playbackState` is now `.playing`
+  while buffering, with the rate at zero, so the car shows pause rather than a
+  play button that would open the track again.
+
+No JavaScript API change.
+
 ## [1.0.15]
 
 ### Fixed

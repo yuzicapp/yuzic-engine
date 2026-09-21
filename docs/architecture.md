@@ -131,6 +131,22 @@ it implicit, and CarPlay showed "paused" while audio was playing on the first
 track of a session — fixed downstream by patching the library. An engine that
 owns the session should never need that patch to exist.
 
+`.buffering` is stated as `.playing`, with a rate of zero. The listener asked
+for audio and it is on its way, so the button is pause and the clock stands
+still. Stated as paused, a track picked in the car showed a play button while
+it opened, and pressing it opened the track again.
+
+The state is only as good as what it is stated about. A track that is opening
+has no reader yet, and for a long time that meant nothing was published until
+it had one. A car selection is `setQueue` and `play`, the advance goes through
+`startTrack`, and neither said anything, so the lock screen and the car showed
+the track before for the length of the open: about two seconds of the wrong
+title, paused, over the right song starting. A skip did say the new title, but
+with the old track's position and length, because the old reader was still
+attached. Now every path publishes the track that was asked for at once, from
+the top with the length the host declared, and drops the outgoing reader first.
+`PlaybackEngineTests` reads it back through `NowPlayingCenter.lastPublished`.
+
 ### When the system takes the audio away
 
 A call, Siri, an alarm, another app with a non-mixable session, a voice memo,
