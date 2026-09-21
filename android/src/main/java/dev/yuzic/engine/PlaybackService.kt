@@ -117,7 +117,15 @@ class PlaybackService : MediaLibraryService() {
     @Volatile
     var onCommandsMayHaveChanged: (() -> Unit)? = null
 
-    private const val BROWSE_ROOT_ID = "yuzic:root"
+    /**
+     * Tell connected cars the tree changed. Main thread only.
+     *
+     * A car asks for the root once, often before the host has set a tree, and
+     * then shows what it got until told otherwise. Without this the library
+     * stayed empty until the driver left the app and came back.
+     */
+    @Volatile
+    var onBrowseTreeChanged: (() -> Unit)? = null
 
     /**
      * The session's id. Explicit because Media3's default is `""`, and an empty
@@ -192,9 +200,14 @@ class PlaybackService : MediaLibraryService() {
       // The queue decides part of the command set, so the module needs a way to
       // say "ask again" when it changes something the player cannot see.
       onCommandsMayHaveChanged = { enginePlayer.notifyAvailableCommandsChanged() }
-      session = MediaLibrarySession.Builder(this, enginePlayer, LibraryCallback())
+      val librarySession = MediaLibrarySession.Builder(this, enginePlayer, LibraryCallback())
         .setId(SESSION_ID)
         .build()
+      session = librarySession
+      onBrowseTreeChanged = {
+        val count = browseRoot?.children?.size ?: 0
+        librarySession.notifyChildrenChanged(BROWSE_ROOT_ID, count, null)
+      }
     }
   }
 
@@ -215,6 +228,7 @@ class PlaybackService : MediaLibraryService() {
 
   override fun onDestroy() {
     onCommandsMayHaveChanged = null
+    onBrowseTreeChanged = null
     session?.run {
       player.release()
       release()
@@ -272,7 +286,9 @@ class PlaybackService : MediaLibraryService() {
         // A car that asks before the host has set a tree gets an empty
         // browsable root, not an error. An error here makes the app look broken
         // in the launcher; an empty root looks like a library still loading,
-        // which is what it is.
+        // which is what it is. Its children have to be empty too, not an
+        // error, which `browseChildren` sees to, and it has the real root's id
+        // so the car is still subscribed when the tree arrives.
         ?: return Futures.immediateFuture(
           LibraryResult.ofItem(browsableItem(BROWSE_ROOT_ID, "yuzic"), params)
         )
@@ -289,10 +305,10 @@ class PlaybackService : MediaLibraryService() {
       pageSize: Int,
       params: LibraryParams?,
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-      val node = findNode(browseRoot, parentId)
-        ?: return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
-
-      val children = node.children.orEmpty().map { child ->
+      val children = (
+        browseChildren(browseRoot, parentId)
+          ?: return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
+        ).map { child ->
         // Read once into a local. `playable` is a `var` on a record the host
         // can replace, so the compiler will not smart-cast it — and the reason
         // it will not is real here: a `setBrowseTree` landing between the null
@@ -320,7 +336,7 @@ class PlaybackService : MediaLibraryService() {
       browser: MediaSession.ControllerInfo,
       mediaId: String,
     ): ListenableFuture<LibraryResult<MediaItem>> {
-      val node = findNode(browseRoot, mediaId)
+      val node = findBrowseNode(browseRoot, mediaId)
         ?: return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
       val item = node.playable?.toMediaItem()
         ?: browsableItem(node.id, node.title, node.subtitle, node.artworkUri)
@@ -363,22 +379,6 @@ class PlaybackService : MediaLibraryService() {
         .build()
     )
     .build()
-
-  /**
-   * Depth-first walk of the tree the host handed over.
-   *
-   * Linear, and deliberately so for now: the tree arrives whole and is usually
-   * a few hundred nodes. If it grows to the point where this shows up, the fix
-   * is an id→node index built once in `setBrowseTree`, not a cleverer walk.
-   */
-  private fun findNode(node: BrowseNodeRecord?, id: String): BrowseNodeRecord? {
-    if (node == null) return null
-    if (node.id == id) return node
-    node.children?.forEach { child ->
-      findNode(child, id)?.let { return it }
-    }
-    return null
-  }
 }
 
 /**

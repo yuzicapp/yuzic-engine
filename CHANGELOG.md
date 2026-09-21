@@ -9,6 +9,33 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Fixed
+
+- **Android Automotive: the app was missing from the car's media app.** The
+  car's launcher treats an app with its own launcher activity, which every
+  host has, as an ordinary app unless its media service opts in with
+  `androidx.car.app.launchable`. Without it the launcher logs `No opt-in info
+  found` and `Skipping MBS ... non media template app`, at debug level only.
+  The service now opts in, and the library manifest also declares
+  `com.android.automotive` beside the Android Auto key, as Google's Automotive
+  checklist asks. Both merge into the host without a prebuild. It still does
+  not require `android.hardware.type.automotive`, because that would stop a
+  phone build installing on phones.
+- **Android: a car that opened the app before the host set a browse tree
+  showed an error.** The empty stand-in root was served, but asking for its
+  children returned `RESULT_ERROR_BAD_VALUE`, which Android Automotive shows as
+  "isn't working right now". It is now an empty list. The stand-in also had a
+  different id (`yuzic:root`) from the real root (`root`), so a car that
+  connected early stayed subscribed to an id the tree never contained. Both
+  are `root` now, as on iOS.
+- **Android: a browse tree set after the car connected did not appear** until
+  the driver left the app and came back. `setBrowseTree` and
+  `clearBrowseTree` now tell connected cars the root's children changed.
+
+No JavaScript API change.
+
 ## [1.0.14]
 
 ### Fixed

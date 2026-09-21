@@ -563,6 +563,26 @@ entitlement is granted by Apple per app; until it is, none of this appears in a
 car and nothing logs to say why. And yuzic commits its `ios/` directory, so the
 config plugin's Info.plist scene entry lands only on a prebuild.
 
+Android has two cars, and they read different declarations. Android Auto,
+projected from a phone, looks for `com.google.android.gms.car.application`.
+Android Automotive, the OS in the car, wants `com.android.automotive`, and its
+launcher also treats an app with a launcher activity of its own as an
+ordinary app unless the media service opts in with
+`androidx.car.app.launchable`. With only the Auto key, the app installed and
+ran on an Automotive car and was left out of its media app. The launcher
+logged `No opt-in info found` and `Skipping MBS ... non media template app`,
+both at debug level, and nothing else. All three are in the library manifest
+now and `carManifest.test.ts` pins them. The one declaration left to the host
+is requiring `android.hardware.type.automotive`, because that has to be on a
+car build and must not be on a phone build.
+
+The Android service follows the same two rules as CarPlay about time. A car
+that asks before there is a tree gets an empty root with empty children,
+never an error, because Automotive draws an error as "isn't working right
+now". And a tree that arrives later is announced with `notifyChildrenChanged`
+on the root. The stand-in root and the real one share the id `root` for that
+reason: a car stays subscribed to the id it was first given.
+
 ## 12. How this engine fails
 
 Not a design decision — a record. The serious defects here have kept arriving in

@@ -65,9 +65,9 @@ URLs carrying a token that rotates, and keying on those re-downloads the same
 audio every session.
 
 **Platform integration.** Background playback, lock-screen and notification
-controls with artwork, CarPlay and Android Auto browse trees, audio focus,
-interruptions, route changes, becoming-noisy, and a sleep timer that fades
-rather than cuts.
+controls with artwork, CarPlay, Android Auto and Android Automotive browse
+trees, audio focus, interruptions, route changes, becoming-noisy, and a sleep
+timer that fades rather than cuts.
 
 **Events.** State changes, track changes with the time actually listened,
 progress, queue changes, and errors.
@@ -139,6 +139,19 @@ Two things the plugin cannot do for you:
 
 To try CarPlay without a car: Xcode's Simulator has **I/O → External Displays →
 CarPlay**, which needs the entitlement the same way a head unit does.
+
+On Android the car declarations are in the library's own manifest, so they
+merge into your app without a prebuild: the Android Auto key for a phone, and
+for Android Automotive in the car both its own key and the opt-in on the media
+service that puts the app in the car's media app. What the engine leaves to you
+is `<uses-feature android:name="android.hardware.type.automotive"
+android:required="true" />`, which Play expects on a build meant for cars and
+which makes a phone build uninstallable on phones.
+
+To try Android without a car: Android Auto's Desktop Head Unit needs a real
+phone, and Play will not install Android Auto on an emulator. An Android
+Automotive emulator image works: install the app and pick it from the media
+app's source list.
 
 ## Building and testing
 

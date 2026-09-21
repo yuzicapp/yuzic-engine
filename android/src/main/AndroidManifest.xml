@@ -44,6 +44,17 @@
         -->
         <action android:name="android.media.browse.MediaBrowserService" />
       </intent-filter>
+      <!--
+        Android Automotive's launcher treats an app that has a launcher activity
+        of its own, as every host does, as an ordinary app, and leaves its
+        media service out of the media app's sources unless the service opts
+        in here. Missing, it logs "No opt-in info found" and "Skipping MBS ...
+        non media template app" at debug level, and nothing else. Found by
+        reading what its own Bluetooth audio service declares.
+      -->
+      <meta-data
+        android:name="androidx.car.app.launchable"
+        android:value="true" />
     </service>
 
     <!--
@@ -53,6 +64,22 @@
     -->
     <meta-data
       android:name="com.google.android.gms.car.application"
+      android:resource="@xml/automotive_app_desc" />
+
+    <!--
+      Android Automotive, the OS built into the car rather than projected from
+      a phone. It reads this key rather than the one above, and Google's
+      Automotive checklist asks for it. On its own it does not get the app
+      into the media app; the opt-in on the service does that. Same
+      descriptor, because the claim is the same: media.
+
+      Deliberately not here: <uses-feature android:name=
+      "android.hardware.type.automotive" android:required="true" />. Play wants
+      it on a build meant for cars, and on a phone build it makes the app
+      uninstallable on every phone. Which build goes where is the host's call.
+    -->
+    <meta-data
+      android:name="com.android.automotive"
       android:resource="@xml/automotive_app_desc" />
 
   </application>

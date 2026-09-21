@@ -520,10 +520,12 @@ class YuzicEngineModule : Module() {
      */
     AsyncFunction("setBrowseTree") { title: String, nodes: List<FlatBrowseNodeRecord> ->
       PlaybackService.browseRoot = buildBrowseTree(title, nodes)
+      browseTreeChanged()
     }
 
     AsyncFunction("clearBrowseTree") {
       PlaybackService.browseRoot = null
+      browseTreeChanged()
     }
 
     AsyncFunction("setCommands") { commands: List<String> ->
@@ -749,7 +751,7 @@ class YuzicEngineModule : Module() {
       }
 
     return BrowseNodeRecord().apply {
-      id = "root"
+      id = BROWSE_ROOT_ID
       this.title = title
       children = roots.map { assemble(it, 1) }
     }
@@ -993,6 +995,11 @@ class YuzicEngineModule : Module() {
         "bufferedSec" to player.bufferedPosition.coerceAtLeast(0) / 1000.0,
       ),
     )
+  }
+
+  /** Tell a car that is already showing the library to read it again. */
+  private fun browseTreeChanged() = onMain {
+    PlaybackService.onBrowseTreeChanged?.invoke()
   }
 
   /**
