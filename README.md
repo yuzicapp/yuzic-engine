@@ -159,7 +159,7 @@ app's source list.
 npm install
 npm run typecheck    # both tsconfigs — see below
 npm test             # the TypeScript side
-swift test           # the iOS core: 219 tests, no Xcode project, no app
+swift test           # the iOS core: 389 tests, no Xcode project, no app
 ```
 
 `ios/Core` is a SwiftPM target as well as part of the pod, which is what lets
