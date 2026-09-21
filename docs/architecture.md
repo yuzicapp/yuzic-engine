@@ -855,6 +855,30 @@ answered. Neither is reachable from inside the function that got it wrong, and
 that is the argument for the identity being carried in the key and in the
 reader's own flag rather than inferred at the point of use.
 
+**A cache that kept exactly what it was given.** The fourteenth, Android only.
+Every stream goes through Media3's `SimpleCache`, and the cache stores whatever
+body came back. A server that answers a stream request with something that is
+not audio, served as 200 (a captive portal's login page, a proxy's error
+page, a JSON error), has that page written under the track's `MediaId`. The
+host retries with a freshly built URL, but the key is the id, so the retry
+lands on the same entry and reads the same page without making a request. The
+track is then unplayable after the network is fine again, until the evictor
+reaches it or the whole cache is cleared.
+
+Measured against a mock server serving JSON for one track, then fixed: on
+1.0.13 the fixed server received no request for that track at all and the host
+dropped it as unplayable; with the eviction below it received one and the
+track played. iOS does not have this shape. Its disk cache is taken only by a
+stream that answers ranged requests with 206 and a length, which a page served
+as 200 does not, and an entry is filed under the declared length as well.
+
+The cache did nothing wrong by its own lights: it stored the bytes it was
+handed, and returned them. What it could not know is that the bytes were not
+the thing it was caching. So the evidence is taken from the one place that can
+tell: a parsing or decoding failure evicts the failed track's entry before the
+error is reported (`failureMeansBadBytes`), and a network failure does not,
+because the cached bytes are what lets a track play again offline.
+
 ### The instrument is part of the system
 
 Four times the measurement was the fault and the code was fine, and each nearly

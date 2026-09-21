@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import com.google.common.util.concurrent.ListenableFuture
 import expo.modules.kotlin.exception.CodedException
@@ -549,6 +550,13 @@ class YuzicEngineModule : Module() {
   private val main = Handler(Looper.getMainLooper())
 
   /**
+   * Where a failed track's cached bytes are dropped. `Cache.removeResource` is
+   * `@WorkerThread`, and a player error arrives on main. One thread, so an
+   * eviction and the error it precedes can never be reordered against another.
+   */
+  private val cacheWorker = Executors.newSingleThreadExecutor()
+
+  /**
    * The two static multipliers that share `ExoPlayer.volume`.
    *
    * Held here rather than read back off the player, because the product of the
@@ -829,14 +837,49 @@ class YuzicEngineModule : Module() {
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = emitStateIfChanged()
 
     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-      sendEvent(
-        "onError",
-        mapOf(
-          "code" to "PLAYBACK_FAILED",
-          "message" to (error.message ?: error.errorCodeName),
-        ),
-      )
+      val report = {
+        sendEvent(
+          "onError",
+          mapOf(
+            "code" to "PLAYBACK_FAILED",
+            "message" to (error.message ?: error.errorCodeName),
+          ),
+        )
+      }
+      val key = if (failureMeansBadBytes(error.errorCode)) failingCacheKey() else null
+      if (key == null) {
+        report()
+        return
+      }
+      // Evicted *before* the host hears about it, because hearing about it is
+      // what makes the host retry, and a retry that reaches the cache first
+      // reads the same bad body again. See `failureMeansBadBytes`.
+      cacheWorker.execute {
+        try {
+          PlaybackService.graph?.evict(key)
+        } catch (_: Exception) {
+          // A failed eviction leaves the track as it was before this existed.
+          // Not a reason to swallow the error the host needs to hear.
+        }
+        report()
+      }
     }
+  }
+
+  /**
+   * The cache key of the voice that has just failed. Main thread only.
+   *
+   * The listener is shared by both voices, and `onPlayerError` does not say
+   * which one raised it; the player that did is the one holding an error.
+   * The key is the item's custom cache key, which `toMediaItem` sets to the
+   * `MediaId` — the same key `evict` takes.
+   */
+  private fun failingCacheKey(): String? {
+    val graph = PlaybackService.graph ?: return null
+    val failed = listOf(graph.voiceA.player, graph.voiceB.player)
+      .firstOrNull { it.playerError != null } ?: return null
+    val item = failed.currentMediaItem ?: return null
+    return item.localConfiguration?.customCacheKey ?: item.mediaId
   }
 
   /** Main thread only — both the listener and the ticker touch the player. */

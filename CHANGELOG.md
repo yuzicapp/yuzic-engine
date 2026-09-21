@@ -9,6 +9,21 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Fixed
+
+- **Android: a track that once received a non-audio response stayed
+  unplayable after the server recovered.** Every stream goes through the disk
+  cache, keyed on the track, and the cache kept whatever body came back, so a
+  captive portal's login page or a proxy's error page served as 200 was stored
+  as that track's audio. Retrying built a fresh URL onto the same key and read
+  the stored page without a request. A parsing or decoding failure now evicts
+  the failed track's cached bytes before the error is reported, so the host's
+  retry reaches the network. Network failures leave the cache alone, since the
+  cached bytes are what makes offline replay work. No JavaScript API change.
+  iOS is not affected; see §12 of `docs/architecture.md`.
+
 ## [1.0.13]
 
 ### Fixed
