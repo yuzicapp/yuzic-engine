@@ -9,7 +9,7 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
-## [Unreleased]
+## [1.2.0]
 
 ### Added
 
