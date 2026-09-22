@@ -58,6 +58,17 @@
     </service>
 
     <!--
+      Covers for the car's browse rows. Not exported: the car is granted each
+      row it was shown, so nothing else on the device can read through this.
+      See BrowseArtworkProvider for why the car is not simply given the URL.
+    -->
+    <provider
+      android:name="dev.yuzic.engine.BrowseArtworkProvider"
+      android:authorities="${applicationId}.yuzicengine.artwork"
+      android:exported="false"
+      android:grantUriPermissions="true" />
+
+    <!--
       Android Auto. The declaration is what makes the app appear in the car's
       launcher at all; the browse tree the host hands over via setBrowseTree is
       what it shows once opened.

@@ -231,7 +231,40 @@ export interface BrowseNode {
   children?: BrowseNode[];
   /** For a leaf: what to play. */
   playable?: Track;
+  /**
+   * How a branch draws its children. `grid` suits covers (albums, playlists),
+   * `list` suits tracks. Android Auto and Automotive honour it; CarPlay draws
+   * every list as rows with artwork, which is what it does best. Absent means
+   * `list`.
+   */
+  layout?: BrowseLayout;
+  /**
+   * The icon for a top-level entry, which the car shows as a tab. Ignored
+   * below the top level.
+   */
+  icon?: BrowseIcon;
+  /**
+   * A row that does something rather than opening or playing one thing.
+   * `shuffle` plays every track beside it in random order, which is the one
+   * thing a driver most wants from an album or a playlist and cannot build by
+   * hand while moving. It needs no `playable` and no `children`.
+   */
+  action?: BrowseAction;
 }
+
+export type BrowseLayout = 'list' | 'grid';
+
+export type BrowseIcon =
+  | 'recent'
+  | 'favorites'
+  | 'albums'
+  | 'artists'
+  | 'playlists'
+  | 'downloads'
+  | 'radio'
+  | 'library';
+
+export type BrowseAction = 'shuffle';
 
 export type EngineEvent =
   | { type: 'stateChange'; state: PlaybackState }

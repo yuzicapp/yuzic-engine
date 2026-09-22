@@ -1,4 +1,4 @@
-import type { BrowseNode, Track } from './types';
+import type { BrowseAction, BrowseIcon, BrowseLayout, BrowseNode, Track } from './types';
 
 /**
  * One node on the way across the bridge.
@@ -17,7 +17,11 @@ export interface FlatBrowseNode {
   title: string;
   subtitle?: string;
   artworkUri?: string;
+  artworkHeaders?: Record<string, string>;
   playable?: Track;
+  layout?: BrowseLayout;
+  icon?: BrowseIcon;
+  action?: BrowseAction;
 }
 
 /**
@@ -36,13 +40,22 @@ export function flattenBrowseTree(root: BrowseNode): FlatBrowseNode[] {
   const visit = (node: BrowseNode, parentId?: string) => {
     if (seen.has(node.id)) return;
     seen.add(node.id);
+    // Every field the host set, or the far side never sees it. This list was
+    // written before `artworkHeaders` existed and was never extended, so the
+    // headers were declared on `BrowseNode`, accepted by the native record,
+    // and dropped here, and a protected server's thumbnails were blank in the
+    // car on both platforms.
     out.push({
       id: node.id,
       parentId,
       title: node.title,
       subtitle: node.subtitle,
       artworkUri: node.artworkUri,
+      ...(node.artworkHeaders ? { artworkHeaders: node.artworkHeaders } : {}),
       playable: node.playable,
+      ...(node.layout ? { layout: node.layout } : {}),
+      ...(node.icon ? { icon: node.icon } : {}),
+      ...(node.action ? { action: node.action } : {}),
     });
     for (const child of node.children ?? []) visit(child, node.id);
   };

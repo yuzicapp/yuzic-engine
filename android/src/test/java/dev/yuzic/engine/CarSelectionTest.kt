@@ -54,6 +54,36 @@ class CarSelectionTest {
   }
 
   @Test
+  fun aShuffleRowPlaysTheTracksBesideItShuffled() {
+    val withShuffle = folder(
+      BROWSE_ROOT_ID,
+      folder(
+        "album-1",
+        BrowseNodeRecord().apply { id = "album-1/shuffle"; title = "Shuffle"; action = BROWSE_ACTION_SHUFFLE },
+        leaf("a1"), leaf("a2"), leaf("a3"),
+      ),
+    )
+    val chosen = carSelection(withShuffle, listOf("album-1/shuffle"), 0) { it.reversed() }
+    assertEquals(listOf("a3", "a2", "a1"), ids(chosen))
+    assertEquals(0, chosen!!.second)
+  }
+
+  @Test
+  fun theSameTrackUnderTwoFoldersPlaysInTheFolderThatWasTapped() {
+    // Row ids say where a track sits; the track keeps its own id.
+    fun leafAt(nodeId: String, trackId: String) =
+      BrowseNodeRecord().apply { id = nodeId; title = trackId; playable = track(trackId) }
+    val paths = folder(
+      BROWSE_ROOT_ID,
+      folder("favorites", leafAt("favorites/a2", "a2")),
+      folder("album-1", leafAt("album-1/a1", "a1"), leafAt("album-1/a2", "a2")),
+    )
+    val chosen = carSelection(paths, listOf("album-1/a2"), 0)
+    assertEquals(listOf("a1", "a2"), ids(chosen))
+    assertEquals(1, chosen!!.second)
+  }
+
+  @Test
   fun anEmptyFolderPlaysNothing() {
     assertNull(carSelection(folder(BROWSE_ROOT_ID, folder("empty")), listOf("empty"), 0))
   }

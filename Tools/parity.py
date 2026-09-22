@@ -52,20 +52,7 @@ KNOWN_GAPS = {
 #
 # A field-level gap rather than a whole method, because the method itself works
 # on both platforms — it is one argument of one record that has nowhere to go.
-KNOWN_FIELD_GAPS = {
-    # Browse rows on Android get their cover through Media3, which takes a URI
-    # on `MediaMetadata` and fetches it itself — there is no hook to attach a
-    # header to that request. Carrying the field anyway would put a value on the
-    # bridge that nothing on the far side can read, which is the shape this
-    # project keeps having to remove.
-    #
-    # The consequence is real and bounded: browse thumbnails on Android render
-    # for an ordinary server and not for a header-authenticated one. Fixing it
-    # means fetching each cover with the OkHttp factory that already carries
-    # `TrackHeaders` and handing Media3 the bytes via `setArtworkData` — device
-    # work, tracked separately.
-    "artworkHeaders": "android",
-}
+KNOWN_FIELD_GAPS: dict[str, str] = {}
 
 # Events one platform declares and deliberately never sends. Same rule as
 # KNOWN_GAPS: listing one is a claim that the difference is understood, not a

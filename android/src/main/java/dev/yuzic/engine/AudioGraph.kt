@@ -227,7 +227,7 @@ class AudioGraph(private val context: Context, private val httpCallFactory: Call
   /**
    * Drop one track's cached audio, by the host's `MediaId`.
    *
-   * That is the key because `toMediaItem` sets it as the custom cache key — so
+   * That is the key because `toNowPlayingMediaItem` sets it as the custom cache key — so
    * this takes the same id the host uses everywhere else, and does not need a
    * URI that may since have rotated its token.
    */

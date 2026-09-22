@@ -9,6 +9,34 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.2.0]
+
+### Added
+
+- `BrowseNode.icon`, `layout` and `action`. Top-level entries draw as tabs with
+  icons on both platforms, Android Auto draws a `grid` node's children as
+  covers, and an `action: 'shuffle'` row plays the tracks beside it shuffled.
+- Android: search in the car, answered from the pushed tree.
+- Android: spoken requests ("play Abbey Road on yuzic"), also from the tree.
+- Android: playback resumption. The queue is kept, encrypted like the tree, so
+  a car or headset asking to carry on gets the last queue with the app closed.
+- Android: a downloaded track is marked as downloaded in the car.
+- iOS: the playing track is marked in CarPlay lists.
+- iOS: CarPlay's Up Next button lists the queue and jumps within it.
+
+### Fixed
+
+- Browse row artwork headers were dropped by `flattenBrowseTree`, so a
+  protected server's covers were blank in the car on both platforms.
+- Android: browse covers go through a content provider, so they load with
+  their headers, on Android Automotive, and for downloaded files.
+- iOS: a car selection made before `setup` finished did nothing. It is held
+  and played once the engine exists.
+- iOS: lists respect the car's own item limit, which some cars set to twelve.
+- iOS: a new tree of the same shape refreshes lists in place instead of
+  taking the driver back to the top, and an identical tree changes nothing.
+- A track chosen in a playlist that holds it twice starts at the row tapped.
+
 ## [1.1.0]
 
 ### Added
