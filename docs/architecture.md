@@ -599,6 +599,13 @@ now". And a tree that arrives later is announced with `notifyChildrenChanged`
 on the root. The stand-in root and the real one share the id `root` for that
 reason: a car stays subscribed to the id it was first given.
 
+Being subscribed is not automatic either. Media3's default `onSubscribe` asks
+`onGetItem` for the parent and refuses unless the answer is a browsable item,
+so the stand-in has to be served there too (`browseNode`). It was not in
+1.0.15 and 1.0.16: `onGetItem("root")` with no tree was an error, a car that
+opened the app early was never subscribed, and the announcement went nowhere.
+A fresh open showed the tree, which is why it looked like it worked.
+
 ## 12. How this engine fails
 
 Not a design decision — a record. The serious defects here have kept arriving in

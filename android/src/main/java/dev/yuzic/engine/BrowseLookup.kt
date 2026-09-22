@@ -12,6 +12,30 @@ package dev.yuzic.engine
 internal const val BROWSE_ROOT_ID = "root"
 
 /**
+ * The node the car is told about when it asks for [id] itself, rather than
+ * for its children, or null for an id that is not in the tree.
+ *
+ * With no tree yet, the root is the empty stand-in, not missing. This is the
+ * question Media3 asks before it accepts a subscription: its default
+ * `onSubscribe` calls `onGetItem` for the parent and refuses unless that is a
+ * browsable item. Answering the root with an error made every car that opened
+ * the app before `setBrowseTree` unsubscribed, so the `notifyChildrenChanged`
+ * sent when the tree arrived reached nobody, and the library stayed empty
+ * until the driver left and came back.
+ */
+internal fun browseNode(root: BrowseNodeRecord?, id: String): BrowseNodeRecord? {
+  if (root == null) return if (id == BROWSE_ROOT_ID) standInRoot() else null
+  return findBrowseNode(root, id)
+}
+
+/** The root served before the host has set a tree: browsable and empty. */
+internal fun standInRoot() = BrowseNodeRecord().apply {
+  id = BROWSE_ROOT_ID
+  title = "yuzic"
+  children = emptyList()
+}
+
+/**
  * What the car gets when it opens [parentId]: its children, or null for an id
  * that is not in the tree.
  *

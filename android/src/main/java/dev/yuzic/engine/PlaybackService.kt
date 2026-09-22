@@ -282,16 +282,15 @@ class PlaybackService : MediaLibraryService() {
       browser: MediaSession.ControllerInfo,
       params: LibraryParams?,
     ): ListenableFuture<LibraryResult<MediaItem>> {
-      val root = browseRoot
-        // A car that asks before the host has set a tree gets an empty
-        // browsable root, not an error. An error here makes the app look broken
-        // in the launcher; an empty root looks like a library still loading,
-        // which is what it is. Its children have to be empty too, not an
-        // error, which `browseChildren` sees to, and it has the real root's id
-        // so the car is still subscribed when the tree arrives.
-        ?: return Futures.immediateFuture(
-          LibraryResult.ofItem(browsableItem(BROWSE_ROOT_ID, "yuzic"), params)
-        )
+      // A car that asks before the host has set a tree gets an empty
+      // browsable root, not an error. An error here makes the app look broken
+      // in the launcher; an empty root looks like a library still loading,
+      // which is what it is. Its children have to be empty too, not an
+      // error, which `browseChildren` sees to, and asked for as an item it has
+      // to be the same stand-in, which `browseNode` sees to, or the car's
+      // subscription is refused. It has the real root's id so the car is
+      // still subscribed when the tree arrives.
+      val root = browseRoot ?: standInRoot()
       return Futures.immediateFuture(
         LibraryResult.ofItem(browsableItem(root.id, root.title, root.subtitle, root.artworkUri), params)
       )
@@ -336,7 +335,7 @@ class PlaybackService : MediaLibraryService() {
       browser: MediaSession.ControllerInfo,
       mediaId: String,
     ): ListenableFuture<LibraryResult<MediaItem>> {
-      val node = findBrowseNode(browseRoot, mediaId)
+      val node = browseNode(browseRoot, mediaId)
         ?: return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
       val item = node.playable?.toMediaItem()
         ?: browsableItem(node.id, node.title, node.subtitle, node.artworkUri)

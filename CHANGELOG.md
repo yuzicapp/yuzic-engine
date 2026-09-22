@@ -9,6 +9,22 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Fixed
+
+- **Android: a car that opened the app before it had a library never showed
+  it.** 1.0.15 announced a new browse tree with `notifyChildrenChanged`, but
+  Media3's default `onSubscribe` first asks `onGetItem` for the parent and
+  refuses the subscription unless it is a browsable item. Before the host set
+  a tree, `onGetItem("root")` returned an error, so the car was never
+  subscribed and the announcement reached nobody. The root is now answered
+  with the same empty stand-in `onGetLibraryRoot` serves. Checked on an
+  Android Automotive emulator: a tree set with the car's media app open on the
+  empty library now appears within a second; on 1.0.16 it never did.
+
+No JavaScript API change.
+
 ## [1.0.16]
 
 ### Fixed

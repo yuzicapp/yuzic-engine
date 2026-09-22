@@ -48,4 +48,27 @@ class BrowseLookupTest {
     val root = node(BROWSE_ROOT_ID, BrowseNodeRecord().apply { id = "track:1" })
     assertTrue(browseChildren(root, "track:1")!!.isEmpty())
   }
+
+  @Test
+  fun theRootCanBeAskedForBeforeThereIsATree() {
+    // Media3 asks for the parent item before it accepts a subscription, and
+    // refuses unless it is browsable. An error here left an early car
+    // unsubscribed, so the tree arriving never reached it.
+    val root = browseNode(null, BROWSE_ROOT_ID)!!
+    assertEquals(BROWSE_ROOT_ID, root.id)
+    assertNull("a node with something to play is served as a track, not a folder", root.playable)
+    assertTrue(root.children!!.isEmpty())
+  }
+
+  @Test
+  fun anythingElseAskedForBeforeThereIsATreeIsUnknown() {
+    assertNull(browseNode(null, "album:1"))
+  }
+
+  @Test
+  fun onceThereIsATreeTheRootIsTheHostsOwn() {
+    val root = node(BROWSE_ROOT_ID, node("albums"))
+    assertEquals(root, browseNode(root, BROWSE_ROOT_ID))
+    assertEquals("albums", browseNode(root, "albums")!!.id)
+  }
 }
