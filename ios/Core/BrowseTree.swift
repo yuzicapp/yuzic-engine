@@ -31,6 +31,10 @@ public struct BrowseNode: Equatable {
   public let children: [BrowseNode]
   /// Present on a leaf: what to play when it is chosen.
   public let playable: Track?
+  /// A top-level entry's tab icon. See `BrowseNode.icon` in src/types.ts.
+  public let icon: BrowseIcon?
+  /// A row that does something rather than playing one thing. See `BrowseAction`.
+  public let action: BrowseAction?
 
   public init(
     id: String,
@@ -39,7 +43,9 @@ public struct BrowseNode: Equatable {
     artworkUri: String? = nil,
     artworkHeaders: [String: String] = [:],
     children: [BrowseNode] = [],
-    playable: Track? = nil
+    playable: Track? = nil,
+    icon: BrowseIcon? = nil,
+    action: BrowseAction? = nil
   ) {
     self.id = id
     self.title = title
@@ -48,9 +54,35 @@ public struct BrowseNode: Equatable {
     self.artworkHeaders = artworkHeaders
     self.children = children
     self.playable = playable
+    self.icon = icon
+    self.action = action
   }
 
+  /// A leaf plays when chosen, an action row included; a branch opens.
   public var isLeaf: Bool { children.isEmpty }
+}
+
+/**
+ The icons a top-level entry may ask for. Raw values are the strings
+ `BrowseIcon` in src/types.ts allows; one this build does not know is dropped
+ rather than guessed at, and the tab is drawn without an icon.
+ */
+public enum BrowseIcon: String, Equatable {
+  case recent, favorites, albums, artists, playlists, downloads, radio, library
+}
+
+/**
+ What an action row does. `shuffle` plays the tracks beside it in random
+ order: the one thing a driver most wants from an album or a playlist, and
+ cannot build by hand while moving.
+
+ Deliberately no `layout` on iOS. Android Auto can draw a folder's children
+ as a grid; CarPlay's audio lists are rows with artwork, which is the right
+ shape for a car screen anyway, so the hint is accepted on the bridge and has
+ nothing to do here.
+ */
+public enum BrowseAction: String, Equatable {
+  case shuffle
 }
 
 public enum BrowseTree {
@@ -86,9 +118,34 @@ public enum BrowseTree {
     return nil
   }
 
-  /// The children a list should show, capped.
-  public static func items(of node: BrowseNode) -> [BrowseNode] {
-    Array(node.children.prefix(maxItemsPerList))
+  /**
+   The children a list should show, capped.
+
+   `limit` is the car's own, which CarPlay reports per connection and which
+   some cars set far below this backstop (twelve, in a car that limits lists
+   while moving). A list past the car's limit is refused outright, so the
+   smaller of the two wins.
+   */
+  public static func items(of node: BrowseNode, limit: Int = maxItemsPerList) -> [BrowseNode] {
+    Array(node.children.prefix(max(0, min(limit, maxItemsPerList))))
+  }
+
+  /**
+   Whether the root should be drawn as tabs: two or more top-level entries,
+   every one of them a folder, and no more than the car allows. Otherwise a
+   single list, which is also the answer for a tree with one entry, where a tab
+   bar of one tab is a title with extra chrome.
+   */
+  public static func drawsAsTabs(_ root: BrowseNode, maximumTabs: Int) -> Bool {
+    let entries = root.children
+    return entries.count >= 2 && entries.count <= maximumTabs && entries.allSatisfy { !$0.isLeaf }
+  }
+
+  /// Ids of the top-level entries, in order. Two trees with the same answer can
+  /// be refreshed in place rather than rebuilt, which keeps the driver where
+  /// they were.
+  public static func tabIds(of root: BrowseNode) -> [String] {
+    root.children.map(\.id)
   }
 
   // MARK: - Building
@@ -112,11 +169,14 @@ public enum BrowseTree {
     /// Sent only while fetching `artworkUri` — see `BrowseNode.artworkHeaders`.
     public let artworkHeaders: [String: String]
     public let playable: Track?
+    public let icon: BrowseIcon?
+    public let action: BrowseAction?
 
     public init(
       id: String, parentId: String? = nil, title: String,
       subtitle: String? = nil, artworkUri: String? = nil,
-      artworkHeaders: [String: String] = [:], playable: Track? = nil
+      artworkHeaders: [String: String] = [:], playable: Track? = nil,
+      icon: BrowseIcon? = nil, action: BrowseAction? = nil
     ) {
       self.id = id
       self.parentId = parentId
@@ -125,6 +185,8 @@ public enum BrowseTree {
       self.artworkUri = artworkUri
       self.artworkHeaders = artworkHeaders
       self.playable = playable
+      self.icon = icon
+      self.action = action
     }
   }
 
@@ -167,7 +229,9 @@ public enum BrowseTree {
         artworkUri: node.artworkUri,
         artworkHeaders: node.artworkHeaders,
         children: children,
-        playable: node.playable
+        playable: node.playable,
+        icon: node.icon,
+        action: node.action
       )
     }
 

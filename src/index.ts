@@ -9,6 +9,9 @@ export type {
 } from './AudioEngine';
 
 export type {
+  BrowseAction,
+  BrowseIcon,
+  BrowseLayout,
   BrowseNode,
   CacheOptions,
   CacheStats,

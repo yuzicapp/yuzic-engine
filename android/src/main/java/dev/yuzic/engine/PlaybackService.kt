@@ -1,6 +1,9 @@
 package dev.yuzic.engine
 
+import android.content.ContentResolver
 import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -8,6 +11,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
@@ -35,6 +39,10 @@ import com.google.common.util.concurrent.ListenableFuture
 class PlaybackService : MediaLibraryService() {
 
   private var session: MediaLibrarySession? = null
+
+  /** Each car's last search, so it can be answered again when the tree changes. */
+  private val openSearches =
+    java.util.concurrent.ConcurrentHashMap<MediaSession.ControllerInfo, Pair<String, LibraryParams?>>()
 
   /**
    * The engine state, shared with [YuzicEngineModule].
@@ -112,6 +120,10 @@ class PlaybackService : MediaLibraryService() {
      */
     @Volatile
     var controllerTracks: Map<String, TrackRecord> = emptyMap()
+
+    /** Where [EngineCore] keeps the queue for `onPlaybackResumption`. Set in `onCreate`. */
+    @Volatile
+    internal var resumptionStore: ResumptionStore? = null
 
     /**
      * Ask the session to re-read `getAvailableCommands`.
@@ -219,11 +231,19 @@ class PlaybackService : MediaLibraryService() {
         .build()
       session = librarySession
       onBrowseTreeChanged = {
-        val count = browseRoot?.children?.size ?: 0
-        librarySession.notifyChildrenChanged(BROWSE_ROOT_ID, count, null)
+        val root = browseRoot
+        librarySession.notifyChildrenChanged(BROWSE_ROOT_ID, root?.children?.size ?: 0, null)
+        // A search the car is showing is answered again from the new tree,
+        // including one held while the saved tree was read back.
+        openSearches.forEach { (browser, search) ->
+          librarySession.notifySearchResultChanged(
+            browser, search.first, searchBrowseTree(root, search.first).size, search.second,
+          )
+        }
       }
     }
 
+    resumptionStore = ResumptionStore.forContext(this)
     restoreBrowseTree()
     // The advance, the crossfade and the progress clock all hang off this, and
     // a car can start playback with no host to call `setup`.
@@ -245,16 +265,32 @@ class PlaybackService : MediaLibraryService() {
     val generation = browseTreeGeneration.get()
     val store = BrowseTreeStore.forContext(this)
     val main = android.os.Handler(android.os.Looper.getMainLooper())
+    restoring = true
     Thread {
-      val saved = store.load() ?: return@Thread
-      val restored = buildBrowseTree(saved.first, saved.second)
+      val restored = store.load()?.let { (title, nodes) -> buildBrowseTree(title, nodes) }
       main.post {
-        if (browseRoot != null || browseTreeGeneration.get() != generation) return@post
-        browseRoot = restored
+        restoring = false
+        if (restored != null && browseRoot == null && browseTreeGeneration.get() == generation) {
+          browseRoot = restored
+        }
+        // Also when nothing was restored: a search held for the restore is
+        // owed an answer either way.
         onBrowseTreeChanged?.invoke()
       }
     }.apply { name = "yuzic-engine-browse-restore" }.start()
   }
+
+  /**
+   * True while the saved tree is being read back. Main thread writes; binder
+   * threads read.
+   *
+   * A search that arrives meanwhile is held rather than answered, because
+   * Android Automotive's search is one-shot: it reopens its search screen
+   * the moment the process starts, takes the first answer as final, and an
+   * empty one showed "Media isn't available" for a query that would match.
+   */
+  @Volatile
+  private var restoring = false
 
   override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
@@ -345,8 +381,19 @@ class PlaybackService : MediaLibraryService() {
       // subscription is refused. It has the real root's id so the car is
       // still subscribed when the tree arrives.
       val root = browseRoot ?: standInRoot()
+      // The defaults for every list the car draws: rows, unless a node asks
+      // for a grid (see `itemFor`). Sent with the root because that is where
+      // a car reads them. Search support is advertised by Media3 on its own,
+      // from the session commands a controller is granted.
+      val extras = Bundle().apply {
+        putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM)
+        putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM)
+      }
       return Futures.immediateFuture(
-        LibraryResult.ofItem(browsableItem(root.id, root.title, root.subtitle, root.artworkUri), params)
+        LibraryResult.ofItem(
+          itemFor(root, browser, topLevel = false),
+          LibraryParams.Builder().setExtras(extras).build(),
+        )
       )
     }
 
@@ -361,18 +408,7 @@ class PlaybackService : MediaLibraryService() {
       val children = (
         browseChildren(browseRoot, parentId)
           ?: return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
-        ).map { child ->
-        // Read once into a local. `playable` is a `var` on a record the host
-        // can replace, so the compiler will not smart-cast it — and the reason
-        // it will not is real here: a `setBrowseTree` landing between the null
-        // check and the use is exactly what this service is built to survive.
-        val playable = child.playable
-        if (playable != null) {
-          playable.toMediaItem()
-        } else {
-          browsableItem(child.id, child.title, child.subtitle, child.artworkUri)
-        }
-      }
+        ).map { child -> itemFor(child, browser, topLevel = parentId == BROWSE_ROOT_ID) }
 
       // Paged because Android Auto asks for pages and some head units enforce
       // a hard limit per response. Serving the whole list regardless of `page`
@@ -400,8 +436,15 @@ class PlaybackService : MediaLibraryService() {
       startIndex: Int,
       startPositionMs: Long,
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-      val chosen = carSelection(browseRoot, mediaItems.map { it.mediaId }, startIndex.coerceAtLeast(0))
-        ?: return Futures.immediateFailedFuture(UnsupportedOperationException("nothing playable was chosen"))
+      val root = browseRoot
+      // A spoken request arrives as one item with no id and the words in its
+      // request metadata. It is the one selection Play's review checks by
+      // name (VC-1), and before this it failed like any unknown id.
+      val spoken = mediaItems.singleOrNull()?.takeIf { it.mediaId.isEmpty() }
+      val chosen = (
+        if (spoken != null) voiceSelection(root, spoken.requestMetadata.searchQuery.orEmpty())
+        else carSelection(root, mediaItems.map { it.mediaId }, startIndex.coerceAtLeast(0))
+        ) ?: return Futures.immediateFailedFuture(UnsupportedOperationException("nothing playable was chosen"))
       val (tracks, at) = chosen
       controllerTracks = tracks.associateBy { it.id }
       val position = if (startPositionMs == C.TIME_UNSET) 0L else startPositionMs
@@ -429,11 +472,82 @@ class PlaybackService : MediaLibraryService() {
       browser: MediaSession.ControllerInfo,
       mediaId: String,
     ): ListenableFuture<LibraryResult<MediaItem>> {
-      val node = browseNode(browseRoot, mediaId)
+      val root = browseRoot
+      val node = browseNode(root, mediaId)
         ?: return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
-      val item = node.playable?.toMediaItem()
-        ?: browsableItem(node.id, node.title, node.subtitle, node.artworkUri)
-      return Futures.immediateFuture(LibraryResult.ofItem(item, null))
+      val topLevel = root?.children.orEmpty().any { it.id == node.id }
+      return Futures.immediateFuture(LibraryResult.ofItem(itemFor(node, browser, topLevel), null))
+    }
+
+    /**
+     * A search from the car's search box.
+     *
+     * Answered from the tree already pushed, never from the server: see
+     * [searchBrowseTree]. Media3 has advertised search to every car all along,
+     * because the default session commands include it, and the default answer
+     * was an error, so the car drew a search button that never found anything.
+     */
+    override fun onSearch(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      query: String,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<Void>> {
+      openSearches[browser] = query to params
+      val root = browseRoot
+      // Held until the saved tree is back; see `restoring`.
+      if (root == null && restoring) return Futures.immediateFuture(LibraryResult.ofVoid())
+      session.notifySearchResultChanged(browser, query, searchBrowseTree(root, query).size, params)
+      return Futures.immediateFuture(LibraryResult.ofVoid())
+    }
+
+    override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
+      openSearches.remove(controller)
+    }
+
+    override fun onGetSearchResult(
+      session: MediaLibrarySession,
+      browser: MediaSession.ControllerInfo,
+      query: String,
+      page: Int,
+      pageSize: Int,
+      params: LibraryParams?,
+    ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+      val hits = searchBrowseTree(browseRoot, query).map { itemFor(it, browser, topLevel = false) }
+      val from = (page * pageSize).coerceIn(0, hits.size)
+      val to = (from + pageSize).coerceAtMost(hits.size)
+      return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(hits.subList(from, to)), params))
+    }
+
+    /**
+     * Something asked to play with nothing loaded: Android Auto reconnecting,
+     * a headset's play button, the system's resume card.
+     *
+     * The queue in memory if there is one, else the one [EngineCore] kept.
+     * Media3 hands the result to the player's `setMediaItems`, and starts it
+     * only when the request was for playback, so a car connecting shows what
+     * was playing without starting it, which Play's review asks for (MA-1).
+     */
+    override fun onPlaybackResumption(
+      mediaSession: MediaSession,
+      controller: MediaSession.ControllerInfo,
+      isForPlayback: Boolean,
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+      val live = queue.tracks
+      val saved = if (live.isNotEmpty()) {
+        val position = graph?.activeVoice?.player?.currentPosition ?: 0L
+        ResumptionStore.Saved(live.toList(), queue.activeIndex, position.coerceAtLeast(0L))
+      } else {
+        resumptionStore?.load()
+      } ?: return Futures.immediateFailedFuture(UnsupportedOperationException("nothing to resume"))
+      controllerTracks = saved.tracks.associateBy { it.id }
+      return Futures.immediateFuture(
+        MediaSession.MediaItemsWithStartPosition(
+          saved.tracks.map { it.toNowPlayingMediaItem() },
+          saved.index.coerceIn(0, saved.tracks.size - 1),
+          saved.positionMs,
+        )
+      )
     }
 
     override fun onCustomCommand(
@@ -454,25 +568,81 @@ class PlaybackService : MediaLibraryService() {
     }
   }
 
-  private fun browsableItem(
-    id: String,
-    title: String,
-    subtitle: String? = null,
-    artworkUri: String? = null,
-  ): MediaItem = MediaItem.Builder()
-    .setMediaId(id)
-    .setMediaMetadata(
-      MediaMetadata.Builder()
-        .setTitle(title)
-        .setSubtitle(subtitle)
-        .setArtworkUri(artworkUri?.let { android.net.Uri.parse(it) })
-        .setIsBrowsable(true)
-        .setIsPlayable(false)
-        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-        .build()
-    )
-    .build()
+  /**
+   * One row as the car draws it.
+   *
+   * The row's id is the node's, not the track's. The same track can sit in an
+   * album and in a playlist, the car hands back whichever id it was shown, and
+   * that id has to say which place was tapped. The track's own id is what the
+   * queue carries once it plays.
+   *
+   * - A top-level entry is a tab, and carries the icon the host named.
+   * - A shuffle row carries the shuffle icon, and plays.
+   * - Anything else carries its cover, served by [BrowseArtworkProvider], and
+   *   the car that asked is granted it.
+   * - A node with a layout sets how its own children are drawn.
+   * - A track kept on the device is marked downloaded, which the car shows.
+   */
+  private fun itemFor(node: BrowseNodeRecord, browser: MediaSession.ControllerInfo?, topLevel: Boolean): MediaItem {
+    val playable = node.playable
+    val isAction = node.action == BROWSE_ACTION_SHUFFLE
+    val artwork = when {
+      topLevel && node.icon != null -> iconUri(node.icon)
+      isAction -> iconUri("shuffle")
+      else -> null
+    } ?: BrowseArtworkProvider.carUriFor(this, node)?.also { uri ->
+      browser?.let { BrowseArtworkProvider.grantTo(this, it.packageName, uri) }
+    }
+
+    val extras = Bundle()
+    when (node.layout) {
+      "grid" -> MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+      "list" -> MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM
+      else -> null
+    }?.let { style ->
+      extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, style)
+      extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_PLAYABLE, style)
+    }
+    if (playable?.uri?.startsWith("file:") == true) {
+      extras.putLong(MediaConstants.EXTRAS_KEY_DOWNLOAD_STATUS, MediaConstants.EXTRAS_VALUE_STATUS_DOWNLOADED)
+    }
+
+    val metadata = MediaMetadata.Builder()
+      .setTitle(node.title)
+      .setSubtitle(node.subtitle ?: playable?.artist)
+      .setArtist(playable?.artist)
+      .setAlbumTitle(playable?.album)
+      .setArtworkUri(artwork)
+      .setIsBrowsable(playable == null && !isAction)
+      .setIsPlayable(playable != null || isAction)
+      .setMediaType(
+        if (playable != null || isAction) MediaMetadata.MEDIA_TYPE_MUSIC
+        else MediaMetadata.MEDIA_TYPE_FOLDER_MIXED
+      )
+      .apply { if (!extras.isEmpty) setExtras(extras) }
+      .build()
+    return MediaItem.Builder().setMediaId(node.id).setMediaMetadata(metadata).build()
+  }
+
+  /** A bundled icon as a URI the car can open, or null for a name the engine has none for. */
+  private fun iconUri(name: String?): Uri? {
+    if (name == null || name !in CAR_ICONS) return null
+    return Uri.Builder()
+      .scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
+      .authority(packageName)
+      .appendPath("drawable")
+      .appendPath("yuzic_car_$name")
+      .build()
+  }
 }
+
+/**
+ * The names `BrowseIcon` in src/types.ts allows, plus shuffle, each drawn by a
+ * `res/drawable/yuzic_car_*` vector.
+ */
+private val CAR_ICONS = setOf(
+  "recent", "favorites", "albums", "artists", "playlists", "downloads", "radio", "library", "shuffle",
+)
 
 /**
  * One `Player` for a session that is really two players.

@@ -107,7 +107,11 @@ internal fun buildBrowseTree(title: String, flat: List<FlatBrowseNodeRecord>): B
       this.title = node.title
       subtitle = node.subtitle
       artworkUri = node.artworkUri
+      artworkHeaders = node.artworkHeaders
       playable = node.playable
+      layout = node.layout
+      icon = node.icon
+      action = node.action
       children = if (depth >= BROWSE_MAX_DEPTH) emptyList()
       else childrenByParent[node.id].orEmpty().map { assemble(it, depth + 1) }
     }
@@ -118,6 +122,9 @@ internal fun buildBrowseTree(title: String, flat: List<FlatBrowseNodeRecord>): B
     children = roots.map { assemble(it, 1) }
   }
 }
+
+/** The one action a row can carry today. See `BrowseNode.action` in src/types.ts. */
+internal const val BROWSE_ACTION_SHUFFLE = "shuffle"
 
 /**
  * What a car's selection plays: the tracks, in order, and where to start.
@@ -130,21 +137,28 @@ internal fun buildBrowseTree(title: String, flat: List<FlatBrowseNodeRecord>): B
  *   there**, as on iOS (docs/architecture.md §11): the album is the context
  *   the driver believes they are in, and they cannot pick a follow-up while
  *   moving.
+ * - **A shuffle row plays the tracks beside it in random order.**
  * - **A folder chosen to play plays its tracks from the top.**
  * - **Several ids play as given**, from [startIndex], dropping any the tree
  *   does not know.
  *
- * Null when nothing chosen can be played.
+ * Null when nothing chosen can be played. [shuffle] is a parameter so the
+ * order can be pinned in a test.
  */
 internal fun carSelection(
   root: BrowseNodeRecord?,
   ids: List<String>,
   startIndex: Int,
+  shuffle: (List<TrackRecord>) -> List<TrackRecord> = { it.shuffled() },
 ): Pair<List<TrackRecord>, Int>? {
   if (root == null || ids.isEmpty()) return null
   if (ids.size == 1) {
     val id = ids.single()
     val node = findBrowseNode(root, id) ?: return null
+    if (node.action == BROWSE_ACTION_SHUFFLE) {
+      val tracks = findParentOf(root, id)?.children.orEmpty().mapNotNull { it.playable }
+      return if (tracks.isEmpty()) null else shuffle(tracks) to 0
+    }
     if (node.playable == null) {
       val tracks = node.children.orEmpty().mapNotNull { it.playable }
       return if (tracks.isEmpty()) null else tracks to 0
@@ -158,6 +172,98 @@ internal fun carSelection(
   if (tracks.isEmpty()) return null
   return tracks to startIndex.coerceIn(0, tracks.size - 1)
 }
+
+/**
+ * The rows a search in the car shows, best first.
+ *
+ * Searched here, over the tree the host already pushed, because a car search
+ * arrives exactly when a server may not answer and JavaScript may not be
+ * running. It finds what the car can already browse, which is the promise a
+ * search box inside the car makes.
+ *
+ * Every word of the query has to appear in the title or the subtitle, ignoring
+ * case and accents, so "beatles abbey" finds Abbey Road by the Beatles. Rows
+ * whose title matches rank above rows that match only by artist. Folders rank
+ * above tracks on a tie, since "play Abbey Road" means the album. The same
+ * track listed under two folders is shown once, and action rows never are.
+ */
+internal fun searchBrowseTree(root: BrowseNodeRecord?, query: String, limit: Int = 50): List<BrowseNodeRecord> {
+  val words = searchWords(query)
+  if (root == null || words.isEmpty()) return emptyList()
+
+  data class Hit(val node: BrowseNodeRecord, val score: Int, val order: Int)
+  val hits = mutableListOf<Hit>()
+  val seenTracks = mutableSetOf<String>()
+  val seenFolders = mutableSetOf<String>()
+  var order = 0
+
+  fun visit(node: BrowseNodeRecord, depth: Int) {
+    if (depth > BROWSE_MAX_DEPTH) return
+    node.children.orEmpty().forEach { child ->
+      val title = normalise(child.title)
+      val subtitle = normalise(child.subtitle.orEmpty())
+      // Depth 1 is a tab, which is navigation rather than something to find.
+      val searchable = child.action == null && depth >= 2
+      if (searchable && words.all { title.contains(it) || subtitle.contains(it) }) {
+        val playable = child.playable
+        val fresh = if (playable != null) seenTracks.add(playable.id)
+        else seenFolders.add("$title|$subtitle")
+        if (fresh) {
+          val joined = words.joinToString(" ")
+          val base = when {
+            title == joined -> 0
+            title.startsWith(joined) -> 1
+            words.all { title.contains(it) } -> 2
+            else -> 3
+          }
+          hits += Hit(child, base * 2 + if (playable == null) 0 else 1, order++)
+        }
+      }
+      visit(child, depth + 1)
+    }
+  }
+  visit(root, 1)
+
+  return hits.sortedWith(compareBy({ it.score }, { it.order })).take(limit).map { it.node }
+}
+
+/**
+ * What a spoken request plays: "play Abbey Road", or just "play yuzic".
+ *
+ * An empty query is the driver asking for music without saying which, and gets
+ * the first thing the host put in the tree, from the top: the host orders its
+ * tabs, so this is its answer, not a guess made here. Otherwise the best search
+ * hit plays the way a tap on it would. Null when nothing matches, which the
+ * assistant reports as the app not finding it, and which is true.
+ */
+internal fun voiceSelection(root: BrowseNodeRecord?, query: String): Pair<List<TrackRecord>, Int>? {
+  if (root == null) return null
+  if (searchWords(query).isEmpty()) {
+    val first = root.children.orEmpty().firstOrNull { tracksUnder(it).isNotEmpty() } ?: return null
+    return tracksUnder(first) to 0
+  }
+  val best = searchBrowseTree(root, query, limit = 1).firstOrNull() ?: return null
+  if (best.playable != null) return carSelection(root, listOf(best.id), 0)
+  val tracks = tracksUnder(best)
+  return if (tracks.isEmpty()) null else tracks to 0
+}
+
+/** Every track under a node, in order, the way iOS's `BrowseTree.tracks(under:)` walks it. */
+internal fun tracksUnder(node: BrowseNodeRecord, depth: Int = 0): List<TrackRecord> {
+  node.playable?.let { return listOf(it) }
+  if (depth >= BROWSE_MAX_DEPTH) return emptyList()
+  return node.children.orEmpty().flatMap { tracksUnder(it, depth + 1) }
+}
+
+private fun searchWords(query: String): List<String> =
+  normalise(query).split(Regex("\\s+")).filter { it.isNotEmpty() }
+
+/** Lower case with accents taken off, so "Beyonce" finds "Beyoncé". */
+private fun normalise(text: String): String =
+  java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+    .replace(Regex("\\p{M}+"), "")
+    .lowercase()
+    .trim()
 
 /** The node whose children include [id], or null. Depth-first, like [findBrowseNode]. */
 internal fun findParentOf(node: BrowseNodeRecord, id: String): BrowseNodeRecord? {

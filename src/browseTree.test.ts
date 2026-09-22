@@ -72,6 +72,39 @@ describe('flattenBrowseTree', () => {
     expect(shared[0]?.parentId).toBe('a');
   });
 
+  it('carries artwork headers, layout, icon and action', () => {
+    // Anything left out here never reaches either platform. The headers were,
+    // for as long as they existed, so a protected server's covers were blank.
+    const tree: BrowseNode = {
+      id: 'root',
+      title: 'Library',
+      children: [{
+        id: 'albums',
+        title: 'Albums',
+        icon: 'albums',
+        layout: 'grid',
+        children: [{
+          id: 'album:1',
+          title: 'First',
+          artworkUri: 'https://example.test/cover',
+          artworkHeaders: { Authorization: 'Basic abc' },
+          children: [{ id: 'album:1/shuffle', title: 'Shuffle', action: 'shuffle' }, leaf('t:1')],
+        }],
+      }],
+    };
+    const byId = Object.fromEntries(flattenBrowseTree(tree).map(n => [n.id, n]));
+    expect(byId['albums']).toMatchObject({ icon: 'albums', layout: 'grid' });
+    expect(byId['album:1']?.artworkHeaders).toEqual({ Authorization: 'Basic abc' });
+    expect(byId['album:1/shuffle']?.action).toBe('shuffle');
+  });
+
+  it('leaves optional fields off rather than sending them empty', () => {
+    const node = flattenBrowseTree(library()).find(n => n.id === 'albums');
+    expect(node).not.toHaveProperty('artworkHeaders');
+    expect(node).not.toHaveProperty('layout');
+    expect(node).not.toHaveProperty('action');
+  });
+
   it('flattens an empty tree to nothing', () => {
     expect(flattenBrowseTree({ id: 'root', title: 'Library' })).toEqual([]);
   });

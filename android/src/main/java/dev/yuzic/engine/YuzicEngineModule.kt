@@ -250,12 +250,8 @@ class YuzicEngineModule : Module() {
 
     // MARK: platform surfaces
     //
-    // These two have no counterpart in ios/YuzicEngineModule.swift yet — it is a
-    // partial file and stops before them. They are declared here anyway because
     // [PlaybackService] has no other way to be handed a browse tree, and a
-    // MediaLibraryService with no root is invisible in the car. Names and
-    // argument shapes are taken from `src/AudioEngine.ts` so that the iOS
-    // implementations, when they land, have nothing to negotiate.
+    // MediaLibraryService with no root is invisible in the car.
 
     /**
      * Take the tree the way the bridge actually sends it.
@@ -428,7 +424,12 @@ class FlatBrowseNodeRecord : Record {
   @Field var title: String = ""
   @Field var subtitle: String? = null
   @Field var artworkUri: String? = null
+  /** Sent only while fetching `artworkUri`, by [BrowseArtworkProvider]. */
+  @Field var artworkHeaders: Map<String, String> = emptyMap()
   @Field var playable: TrackRecord? = null
+  @Field var layout: String? = null
+  @Field var icon: String? = null
+  @Field var action: String? = null
 }
 
 class ReplayGainRecord : Record {
@@ -445,18 +446,24 @@ class CrossfadeRecord : Record {
 }
 
 /**
- * A node of the browse tree. Recursive, which Expo's record converter handles,
- * and which the iOS side does not yet declare — the tree arrives whole either
- * way, so the shape is dictated by `BrowseNode` in src/types.ts rather than by
- * either platform.
+ * A node of the browse tree, as [buildBrowseTree] assembles it from the flat
+ * records. Never crosses the bridge itself; the shape is `BrowseNode` in
+ * src/types.ts.
  */
 class BrowseNodeRecord : Record {
   @Field var id: String = ""
   @Field var title: String = ""
   @Field var subtitle: String? = null
   @Field var artworkUri: String? = null
+  @Field var artworkHeaders: Map<String, String>? = null
   @Field var children: List<BrowseNodeRecord>? = null
   @Field var playable: TrackRecord? = null
+  /** `list` or `grid`: how this node's children are drawn. See `BrowseNode.layout`. */
+  @Field var layout: String? = null
+  /** A top-level entry's tab icon. See `BrowseNode.icon`. */
+  @Field var icon: String? = null
+  /** `shuffle`: plays the tracks beside it in random order. See `BrowseNode.action`. */
+  @Field var action: String? = null
 }
 
 /**
@@ -477,35 +484,17 @@ fun TrackRecord.toMap(): Map<String, Any?> = mapOf(
 )
 
 /**
- * A track as Media3 sees it.
+ * A track as the player and the session see it. Protected artwork
+ * deliberately has no URI: Media3 cannot attach request headers to an artwork
+ * URI, and handing it one would cause a second, unauthenticated fetch.
  *
- * The cache key is the host's `MediaId`, not the URI. Subsonic and Jellyfin both
- * hand out URLs carrying a token that rotates, so keying the cache on the URI
- * would re-download the same audio every session and the LRU would fill with
- * duplicates of one album.
- */
-@UnstableApi
-fun TrackRecord.toMediaItem(): MediaItem = MediaItem.Builder()
-  .setMediaId(id)
-  .setUri(Uri.parse(uri))
-  .setCustomCacheKey(id)
-  .setMediaMetadata(
-    MediaMetadata.Builder()
-      .setTitle(title)
-      .setArtist(artist)
-      .setAlbumTitle(album)
-      .setArtworkUri(artworkUri?.let { Uri.parse(it) })
-      .setIsBrowsable(false)
-      .setIsPlayable(true)
-      .build()
-  )
-  .build()
-
-/**
- * The playback-only media item. Protected artwork deliberately has no URI:
- * Media3 cannot attach request headers to an artwork URI, and handing it one
- * would cause a second, unauthenticated fetch. Browse items keep using
- * [toMediaItem], so their artwork behavior is unchanged.
+ * The cache key is the host's `MediaId`, not the URI. Subsonic and Jellyfin
+ * both hand out URLs carrying a token that rotates, so keying the cache on the
+ * URI would re-download the same audio every session and the LRU would fill
+ * with duplicates of one album.
+ *
+ * Browse rows are built by `PlaybackService.itemFor`, from the node rather
+ * than the track.
  */
 @UnstableApi
 fun TrackRecord.toNowPlayingMediaItem(artworkData: ByteArray? = null): MediaItem = MediaItem.Builder()

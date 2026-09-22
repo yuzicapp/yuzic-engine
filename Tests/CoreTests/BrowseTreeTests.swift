@@ -71,6 +71,35 @@ final class BrowseTreeTests: XCTestCase {
     XCTAssertEqual(BrowseTree.items(of: library()).count, 2)
   }
 
+  func testTheCarsOwnLimitWinsWhenItIsSmaller() {
+    // Some cars allow twelve rows while moving and refuse a longer list.
+    let many = (0..<50).map { BrowseNode(id: "a\($0)", title: "Album \($0)") }
+    let node = BrowseNode(id: "albums", title: "Albums", children: many)
+    XCTAssertEqual(BrowseTree.items(of: node, limit: 12).count, 12)
+    XCTAssertEqual(BrowseTree.items(of: node, limit: 500).count, 50)
+  }
+
+  func testTheRootIsTabsOnlyWhenEveryEntryIsAFolderAndTheyFit() {
+    let folder = { (id: String) in BrowseNode(id: id, title: id, children: [BrowseNode(id: "\(id)/x", title: "x")]) }
+    let four = BrowseNode(id: "root", title: "L", children: ["a", "b", "c", "d"].map(folder))
+    XCTAssertTrue(BrowseTree.drawsAsTabs(four, maximumTabs: 4))
+    XCTAssertFalse(BrowseTree.drawsAsTabs(four, maximumTabs: 3))
+    XCTAssertFalse(BrowseTree.drawsAsTabs(BrowseNode(id: "root", title: "L", children: [folder("a")]), maximumTabs: 4))
+    let withLeaf = BrowseNode(id: "root", title: "L", children: [folder("a"), BrowseNode(id: "t", title: "t", playable: track("t"))])
+    XCTAssertFalse(BrowseTree.drawsAsTabs(withLeaf, maximumTabs: 4))
+    XCTAssertEqual(BrowseTree.tabIds(of: four), ["a", "b", "c", "d"])
+  }
+
+  func testIconsAndActionsSurviveTheRebuild() {
+    let built = BrowseTree.build(title: "Library", from: [
+      .init(id: "albums", title: "Albums", icon: .albums),
+      .init(id: "albums/shuffle", parentId: "albums", title: "Shuffle", action: .shuffle),
+    ])
+    XCTAssertEqual(built.children.first?.icon, .albums)
+    XCTAssertEqual(built.children.first?.children.first?.action, .shuffle)
+    XCTAssertTrue(built.children.first?.children.first?.isLeaf ?? false)
+  }
+
   // MARK: - Building from the flat form
 
   func testRebuildsNestingFromParentReferences() {

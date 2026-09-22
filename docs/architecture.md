@@ -616,8 +616,59 @@ Keystore, since every playable row carries its stream URL and headers and so a
 server's token; `clearBrowseTree` deletes it, and hosts call that at sign-out.
 The service reads it back off the main thread when it starts with no tree, and
 only fills an empty slot: a generation counter stops a restore that finishes
-after a `setBrowseTree` or `clearBrowseTree` from undoing either. iOS does not
-need this, because a CarPlay connection launches the app.
+after a `setBrowseTree` or `clearBrowseTree` from undoing either.
+
+iOS does not keep the tree, and the reason is not the one this section used to
+give. A CarPlay connection does launch the app, but it can launch it into the
+CarPlay scene alone, and a React Native host that starts JavaScript only from
+its phone scene then runs none: no `setup`, no tree, an empty library. The host
+fixes that by starting its React root when a CarPlay scene connects (yuzic's
+`AppDelegate` does), after which the tree arrives within a second or two and
+the root rebuilds itself as above. A tap in that gap is held by the module and
+played once `setup` finishes, rather than dropped.
+
+**Lookups resolve by node id, and node ids must be unique.** Duplicate ids keep
+the first, so a host that uses a track's id as its node id loses that track
+from every folder after the first one it appears in. The playable `Track`
+keeps its own id; the node's id says where it sits. yuzic uses the path.
+
+**What the car draws.** Top-level entries are tabs on both platforms, with
+`icon` as the tab icon (SF Symbols on iOS, bundled vectors on Android). CarPlay
+uses a tab bar only when every top-level entry is a folder and they fit
+`CPTabBarTemplate.maximumTabCount`; otherwise one list. `layout: 'grid'`
+applies on Android only, through Media3's content-style extras: CarPlay's
+audio lists are rows with artwork. An `action: 'shuffle'` row plays the tracks
+beside it shuffled, on both. CarPlay lists are cut at the car's own
+`CPListTemplate.maximumItemCount`, not only at 100, because some cars allow
+twelve rows while moving and refuse a longer list.
+
+A new tree of the same shape refreshes CarPlay's lists in place instead of
+setting a new root. Setting a root pops every screen the driver pushed, and
+hosts re-send the tree for reasons that change nothing visible, so it took the
+driver back to the top mid-choice. An identical tree is ignored outright.
+
+**Android browse covers go through `BrowseArtworkProvider`.** The car is given
+a `content://` URI naming the node, and the provider fetches the cover with the
+node's headers and the certificate-aware client, keeps it in the cache
+directory, and serves the file. Handing the car the URL failed three ways: no
+headers, so protected covers were blank; Android Automotive not loading remote
+artwork in lists; and downloaded tracks' `file://` covers being unreadable to
+another app. The provider is not exported. Each car that browses is granted
+read access to the URIs it was shown.
+
+**Android search and voice are answered from the tree.** Media3 advertises
+search to every car from the default session commands, and the default
+`onSearch` is an error, so the car had a search button that never found
+anything. `searchBrowseTree` matches every word against title and subtitle,
+ignoring case and accents. A spoken request arrives in `onSetMediaItems` as an
+item with no id and a search query, and plays the best match; an empty one
+plays the first tab from the top.
+
+**Android keeps the queue for `onPlaybackResumption`**, sealed the same way as
+the tree, and saved after every queue, track and state change. A car or a
+headset asking to carry on with the process fresh gets the last queue. Media3
+starts it only when the request is for playback, so a car connecting shows it
+paused. `clearBrowseTree` deletes it with the tree and the cached covers.
 
 A car's selection reaches the engine through Media3, which checks
 `COMMAND_SET_MEDIA_ITEM` and `COMMAND_PREPARE` on the controller before it

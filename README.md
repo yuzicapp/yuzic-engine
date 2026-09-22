@@ -156,8 +156,15 @@ the app and open the car's media app, and the library and playback both work
 with no JavaScript running.
 
 Call `clearBrowseTree()` at sign-out. On Android the engine keeps the last
-tree, encrypted, so that a car can show it with the app closed, and clearing
-is what deletes it.
+tree and the last queue, encrypted, so that a car can show and resume them with
+the app closed, and clearing is what deletes them.
+
+Give every browse node a unique id, such as its path. The same track under two
+folders needs two node ids; the `Track` inside keeps its own.
+
+On iOS, a car can launch the app into its CarPlay scene with no phone window.
+If your host starts React Native only from its phone scene, start it when a
+`CPTemplateApplicationScene` connects too, or the car shows an empty library.
 
 ## Building and testing
 

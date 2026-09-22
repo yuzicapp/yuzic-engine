@@ -71,8 +71,62 @@ class BrowseTreeCodecTest {
 
   @Test
   fun anotherVersionIsNotReadAsThisOne() {
-    assertNull(BrowseTreeCodec.decode("""{"v":2,"title":"t","nodes":[]}"""))
+    assertNull(BrowseTreeCodec.decode("""{"v":3,"title":"t","nodes":[]}"""))
     assertNull(BrowseTreeCodec.decode("""{"title":"t","nodes":[]}"""))
+  }
+
+  @Test
+  fun aVersionOneTreeIsStillRead() {
+    // Written by 1.1.0. Discarding it would leave the car empty until the app
+    // next ran, for no reason: it is the same shape without the new fields.
+    val (title, nodes) = BrowseTreeCodec.decode(
+      """{"v":1,"title":"yuzic","nodes":[{"id":"albums","title":"Albums"}]}"""
+    )!!
+    assertEquals("yuzic", title)
+    assertEquals("Albums", nodes.single().title)
+    assertNull(nodes.single().layout)
+  }
+
+  @Test
+  fun rowDetailsComeBack() {
+    val sent = listOf(
+      FlatBrowseNodeRecord().apply {
+        id = "albums"; title = "Albums"; layout = "grid"; icon = "albums"
+      },
+      FlatBrowseNodeRecord().apply {
+        id = "albums/a"; parentId = "albums"; title = "A"
+        artworkUri = "https://music.example/cover/a"
+        artworkHeaders = mapOf("Authorization" to "Basic abc")
+      },
+      FlatBrowseNodeRecord().apply { id = "albums/a/shuffle"; parentId = "albums/a"; title = "Shuffle"; action = "shuffle" },
+    )
+    val nodes = BrowseTreeCodec.decode(BrowseTreeCodec.encode("t", sent))!!.second
+    assertEquals("grid", nodes[0].layout)
+    assertEquals("albums", nodes[0].icon)
+    assertEquals(mapOf("Authorization" to "Basic abc"), nodes[1].artworkHeaders)
+    assertEquals("shuffle", nodes[2].action)
+
+    // And the tree built from them keeps them too.
+    val root = buildBrowseTree("t", nodes)
+    val albums = root.children!!.single()
+    assertEquals("grid", albums.layout)
+    assertEquals(mapOf("Authorization" to "Basic abc"), albums.children!!.single().artworkHeaders)
+  }
+
+  @Test
+  fun aQueueComesBackWhereItStood() {
+    val saved = ResumptionStore.Saved(listOf(track(), TrackRecord().apply { id = "b"; uri = "u"; title = "B" }), 1, 42_000)
+    val back = ResumptionCodec.decode(ResumptionCodec.encode(saved))!!
+    assertEquals(listOf("song-1", "b"), back.tracks.map { it.id })
+    assertEquals(track().headers, back.tracks[0].headers)
+    assertEquals(1, back.index)
+    assertEquals(42_000L, back.positionMs)
+  }
+
+  @Test
+  fun anEmptyOrForeignQueueIsNotResumed() {
+    assertNull(ResumptionCodec.decode("""{"v":1,"index":0,"positionMs":0,"tracks":[]}"""))
+    assertNull(ResumptionCodec.decode("""{"v":9,"index":0,"positionMs":0,"tracks":[]}"""))
   }
 
   @Test

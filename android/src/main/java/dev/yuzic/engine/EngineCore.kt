@@ -54,6 +54,37 @@ internal class EngineCore {
   /** To the host when one is listening; nowhere otherwise. */
   private fun sendEvent(name: String, body: Map<String, Any?>) {
     PlaybackService.eventSink?.invoke(name, body)
+    // The events are also the moments the queue is worth keeping: a new
+    // queue, a new track, a pause or a stop. Hooked here so no emission site
+    // can be added that forgets it. Every state change rather than only a
+    // pause: they are rare, the write is small, and the position a buffering
+    // or a stop leaves behind is worth keeping too.
+    if (name in RESUMPTION_MOMENTS) rememberForResumption()
+  }
+
+  /** One thread, so saves land in the order they were asked for. */
+  private val resumptionWorker = Executors.newSingleThreadExecutor()
+
+  /**
+   * Keep the queue and where it stood, for `onPlaybackResumption`.
+   *
+   * Read on main, where the queue and the player are, and written off it. An
+   * empty queue clears the copy rather than leaving the last one to come back.
+   */
+  private fun rememberForResumption() = onMain {
+    val store = PlaybackService.resumptionStore ?: return@onMain
+    val tracks = queue.tracks
+    if (tracks.isEmpty()) {
+      resumptionWorker.execute { store.clear() }
+      return@onMain
+    }
+    val position = PlaybackService.graph?.activeVoice?.player?.currentPosition ?: 0L
+    val saved = ResumptionStore.Saved(
+      tracks.toList(),
+      queue.activeIndex.coerceIn(0, tracks.size - 1),
+      position.coerceAtLeast(0L),
+    )
+    resumptionWorker.execute { store.save(saved) }
   }
 
   private val main = Handler(Looper.getMainLooper())
@@ -294,7 +325,7 @@ internal class EngineCore {
    *
    * The listener is shared by both voices, and `onPlayerError` does not say
    * which one raised it; the player that did is the one holding an error.
-   * The key is the item's custom cache key, which `toMediaItem` sets to the
+   * The key is the item's custom cache key, which `toNowPlayingMediaItem` sets to the
    * `MediaId` — the same key `evict` takes.
    */
   private fun failingCacheKey(): String? {
@@ -1123,11 +1154,18 @@ internal class EngineCore {
     browseTreeChanged()
     // A cleared tree has to stay cleared across a restart too, or a car
     // would bring back a library the host took away, a signed-out one
-    // included.
-    context?.let(BrowseTreeStore::forContext)?.clear()
+    // included. The saved queue and the fetched covers are that library too.
+    context?.let { ctx ->
+      BrowseTreeStore.forContext(ctx).clear()
+      resumptionWorker.execute { ResumptionStore.forContext(ctx).clear() }
+      BrowseArtworkProvider.clear(ctx)
+    }
   }
 
   companion object {
+    /** The events after which the queue is kept for `onPlaybackResumption`. */
+    private val RESUMPTION_MOMENTS = setOf("onQueueChange", "onTrackChange", "onStateChange")
+
     /**
      * Whether it is time to start fading into the next track.
      *

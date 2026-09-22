@@ -42,8 +42,12 @@ final class CarPlayCoordinatorTests: XCTestCase {
     // during teardown, and an expectation fulfilled twice is a crash, not a
     // failure. Detach the handler before touching anything it observes.
     CarPlayCoordinator.shared.setRootChangeHandler(nil)
+    CarPlayCoordinator.shared.setNowPlayingChangeHandler(nil)
     CarPlayCoordinator.shared.setPlayHandler(nil)
+    CarPlayCoordinator.shared.setQueueSource(nil, skip: nil)
     CarPlayCoordinator.shared.setRoot(nil)
+    CarPlayCoordinator.shared.setNowPlaying(nil)
+    CarPlayCoordinator.shared.shuffle = { $0.shuffled() }
     super.tearDown()
   }
 
@@ -96,5 +100,82 @@ final class CarPlayCoordinatorTests: XCTestCase {
     coordinator.setRootChangeHandler { notified.fulfill() }
     coordinator.setRoot(library())
     wait(for: [notified], timeout: 1.0)
+  }
+
+  func testTheSameTreeAgainNotifiesNobody() {
+    // Hosts re-send the library for all kinds of reasons, and every
+    // notification is the car redrawing under the driver's finger.
+    let coordinator = CarPlayCoordinator.shared
+    coordinator.setRoot(library())
+    let notified = expectation(description: "root change")
+    notified.isInverted = true
+    coordinator.setRootChangeHandler { notified.fulfill() }
+    coordinator.setRoot(library())
+    wait(for: [notified], timeout: 0.3)
+  }
+
+  func testAShuffleRowPlaysTheTracksBesideItShuffled() {
+    let coordinator = CarPlayCoordinator.shared
+    coordinator.shuffle = { $0.reversed() }
+    coordinator.setRoot(BrowseNode(id: "root", title: "Library", children: [
+      BrowseNode(id: "album:1", title: "First", children: [
+        BrowseNode(id: "album:1/shuffle", title: "Shuffle", action: .shuffle),
+        BrowseNode(id: "album:1/t:1", title: "One", playable: track("t:1")),
+        BrowseNode(id: "album:1/t:2", title: "Two", playable: track("t:2")),
+      ]),
+    ]))
+    var captured: ([Track], Int)?
+    coordinator.setPlayHandler { captured = ($0, $1) }
+    coordinator.select("album:1/shuffle")
+    XCTAssertEqual(captured?.0.map(\.id), ["t:2", "t:1"])
+    XCTAssertEqual(captured?.1, 0)
+  }
+
+  func testATrackListedTwiceStartsAtTheRowThatWasTapped() {
+    // A playlist can hold the same song twice. Finding the start by track id
+    // started at the first copy whichever was tapped.
+    let coordinator = CarPlayCoordinator.shared
+    coordinator.setRoot(BrowseNode(id: "root", title: "Library", children: [
+      BrowseNode(id: "mix", title: "Mix", children: [
+        BrowseNode(id: "mix/0", title: "One", playable: track("t:1")),
+        BrowseNode(id: "mix/1", title: "Two", playable: track("t:2")),
+        BrowseNode(id: "mix/2", title: "One again", playable: track("t:1")),
+      ]),
+    ]))
+    var captured: ([Track], Int)?
+    coordinator.setPlayHandler { captured = ($0, $1) }
+    coordinator.select("mix/2")
+    XCTAssertEqual(captured?.0.map(\.id), ["t:1", "t:2", "t:1"])
+    XCTAssertEqual(captured?.1, 2)
+  }
+
+  func testTheNowPlayingMarkIsAnnouncedOnlyWhenItMoves() {
+    let coordinator = CarPlayCoordinator.shared
+    coordinator.setNowPlaying("t:1")
+    let moved = expectation(description: "now playing change")
+    coordinator.setNowPlayingChangeHandler { moved.fulfill() }
+    coordinator.setNowPlaying("t:1")
+    coordinator.setNowPlaying("t:2")
+    wait(for: [moved], timeout: 1.0)
+    XCTAssertEqual(coordinator.nowPlayingId, "t:2")
+  }
+
+  func testUpNextIsTheQueueAfterThePlayingTrack() {
+    let snapshot = CarPlayCoordinator.QueueSnapshot(
+      tracks: ["a", "b", "c", "d"].map(track), activeIndex: 1
+    )
+    XCTAssertEqual(snapshot.upcoming(limit: 10).map { $0.index }, [2, 3])
+    XCTAssertEqual(snapshot.upcoming(limit: 1).map { $0.track.id }, ["c"])
+    XCTAssertTrue(CarPlayCoordinator.QueueSnapshot(tracks: [track("a")], activeIndex: 0).upcoming(limit: 5).isEmpty)
+  }
+
+  func testAJumpFromUpNextReachesTheEngine() {
+    let coordinator = CarPlayCoordinator.shared
+    var skipped: Int?
+    coordinator.setQueueSource({ .init(tracks: [], activeIndex: 0) }, skip: { skipped = $0 })
+    coordinator.skip(to: 3)
+    XCTAssertEqual(skipped, 3)
+    coordinator.setQueueSource(nil, skip: nil)
+    XCTAssertNil(coordinator.queue)
   }
 }

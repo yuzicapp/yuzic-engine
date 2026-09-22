@@ -52,6 +52,15 @@ public final class YuzicEngineModule: Module {
   /// to `setup`: the app has to log in before there is anything to play, so
   /// this has to work before the engine is set up at all.
   private let certificateHTTP = ClientCertificateHTTP()
+  /**
+   A car selection that arrived before `setup`, played once the engine exists.
+
+   A car can launch the app into its CarPlay scene alone. The host starts its
+   JavaScript for that, pushes the tree it has, and calls `setup`, and a driver
+   who taps a row in between would otherwise get a now-playing screen that
+   never starts. Main queue only, like the engine.
+   */
+  private var pendingCarSelection: (tracks: [Track], index: Int)?
 
   /**
    The engine, or a named failure.
@@ -134,6 +143,21 @@ public final class YuzicEngineModule: Module {
       self.engine?.reconfigureAudioSession = { [weak self] in
         try self?.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
       }
+
+      // What the car's "Up Next" reads, and how a row in it jumps. Read on
+      // main when the driver opens it, which is where the engine lives.
+      CarPlayCoordinator.shared.setQueueSource({ [weak self] in
+        let queue = self?.engine?.queue
+        return CarPlayCoordinator.QueueSnapshot(tracks: queue?.tracks ?? [], activeIndex: queue?.activeIndex ?? 0)
+      }, skip: { [weak self] index in
+        try? self?.engine?.skipTo(index: index)
+      })
+
+      DispatchQueue.main.async { [weak self] in
+        guard let self, let engine = self.engine, let pending = self.pendingCarSelection else { return }
+        self.pendingCarSelection = nil
+        self.playCarSelection(pending.tracks, at: pending.index, on: engine)
+      }
     }
 
     AsyncFunction("teardown") {
@@ -142,6 +166,8 @@ public final class YuzicEngineModule: Module {
       // failed launch should not be handed an error for tidying.
       self.engine?.stop()
       self.engine = nil
+      CarPlayCoordinator.shared.setQueueSource(nil, skip: nil)
+      CarPlayCoordinator.shared.setNowPlaying(nil)
       self.graph?.stop()
       self.graph = nil
       self.sleepTimer?.cancel()
@@ -385,16 +411,14 @@ public final class YuzicEngineModule: Module {
         // Played natively rather than round-tripped through JS, for the same
         // reason the tree is: nothing may be listening. The host finds out
         // afterwards through the ordinary track-change event.
-        // Cannot throw across this handler, so a missing engine is logged
-        // rather than dropped in silence — a car showing a track that never
-        // plays is the worst place to have to guess why.
         guard let engine = self.engine else {
-          NSLog("[yuzic-engine] CarPlay selection ignored: engine not set up")
+          // Before `setup`: held, and played the moment it finishes. The
+          // latest tap wins, which is what the driver last asked for.
+          NSLog("[yuzic-engine] CarPlay selection held until the engine is set up")
+          self.pendingCarSelection = (tracks, index)
           return
         }
-        engine.setQueue(tracks, startIndex: index)
-        try? engine.play()
-        self.sendEvent("onQueueChange", [:])
+        self.playCarSelection(tracks, at: index, on: engine)
       }
     }
 
@@ -436,11 +460,12 @@ public final class YuzicEngineModule: Module {
     }.runOnQueue(.main)
   }
 
-  /**
-   `.playback` with `.longFormAudio`: the category that keeps playing when the
-   screen locks and the routing policy that tells the system this is music
-   rather than a game or a call.
-   */
+  private func playCarSelection(_ tracks: [Track], at index: Int, on engine: PlaybackEngine) {
+    engine.setQueue(tracks, startIndex: index)
+    try? engine.play()
+    sendEvent("onQueueChange", [:])
+  }
+
   /// Engine events, translated for JavaScript. One place, so the event names
   /// and payload shapes cannot drift between here and the TypeScript types.
   private func forward(_ event: PlaybackEngine.Event) {
@@ -448,6 +473,8 @@ public final class YuzicEngineModule: Module {
     case .stateChanged(let state):
       sendEvent("onStateChange", ["state": state.rawValue])
     case .trackChanged(let index, let id, let listened):
+      // The car marks the row of what is playing, whoever started it.
+      CarPlayCoordinator.shared.setNowPlaying(id)
       var payload: [String: Any] = ["index": index]
       if let id { payload["id"] = id }
       if let listened { payload["previousListenedSec"] = listened }
@@ -469,6 +496,11 @@ public final class YuzicEngineModule: Module {
     }
   }
 
+  /**
+   `.playback` with `.longFormAudio`: the category that keeps playing when the
+   screen locks and the routing policy that tells the system this is music
+   rather than a game or a call.
+   */
   private func configureAudioSession(pauseOnBecomingNoisy: Bool) throws {
     let session = AVAudioSession.sharedInstance()
     try session.setCategory(.playback, mode: .default, policy: .longFormAudio)
@@ -519,6 +551,10 @@ struct BrowseNodeRecord: Record {
   /// Sent only while fetching `artworkUri` — see `BrowseNode.artworkHeaders`.
   @Field var artworkHeaders: [String: String] = [:]
   @Field var playable: TrackRecord?
+  /// Carried for Android Auto, which can draw a grid. CarPlay draws rows.
+  @Field var layout: String?
+  @Field var icon: String?
+  @Field var action: String?
 }
 
 struct EqBandRecord: Record {
@@ -624,7 +660,9 @@ extension BrowseNodeRecord {
       subtitle: subtitle,
       artworkUri: artworkUri,
       artworkHeaders: artworkHeaders,
-      playable: playable?.asTrack
+      playable: playable?.asTrack,
+      icon: icon.flatMap(BrowseIcon.init(rawValue:)),
+      action: action.flatMap(BrowseAction.init(rawValue:))
     )
   }
 }

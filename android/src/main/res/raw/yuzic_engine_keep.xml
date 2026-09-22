@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The car icons are looked up by name at runtime (PlaybackService builds an
+  android.resource URI from BrowseNode.icon), so nothing in code references
+  them, and a host that shrinks resources would strip every one.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+  tools:keep="@drawable/yuzic_car_*" />
