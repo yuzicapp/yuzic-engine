@@ -121,6 +121,23 @@ The same reasoning applies to the browse tree (§`setBrowseTree`) and the sleep
 timer: the car can ask, and the timer can fire, while nothing of ours is running
 in JS.
 
+"Suspended" understates it on Android. When a car starts the media service on
+its own, Android Auto when the phone connects or Android Automotive when the
+driver opens the media app, the host's JavaScript was never started at all:
+it runs once the app's own screen opens. So the controller cannot live
+anywhere that needs JavaScript to exist, and for a long time it did. The
+queue, the voices, every advance and crossfade and the progress clock were in
+the Expo module, which is created with the JavaScript runtime. A car with no
+app open reached a service with no queue and no one to advance it.
+
+The controller is `EngineCore` now, owned by `PlaybackService` and one per
+process like the graph and the queue; the module is a bridge onto it and the
+host's events go through `PlaybackService.eventSink`, which is null while no
+host listens. The service drives the same core for a car's selection and for
+next and previous, and starts its observation itself, because nobody calls
+`setup` in a car. iOS has had this shape all along: its engine is native
+before anything else is.
+
 ## 4. Explicit now-playing state
 
 `MPNowPlayingInfoCenter.playbackState` is set explicitly on every transition,
@@ -591,6 +608,25 @@ both at debug level, and nothing else. All three are in the library manifest
 now and `carManifest.test.ts` pins them. The one declaration left to the host
 is requiring `android.hardware.type.automotive`, because that has to be on a
 car build and must not be on a phone build.
+
+Android also keeps the tree itself, because a car starting the service in a
+process that had died has no JavaScript to ask. `setBrowseTree` writes it to
+`noBackupFilesDir`, encrypted with AES-GCM under a key held in the Android
+Keystore, since every playable row carries its stream URL and headers and so a
+server's token; `clearBrowseTree` deletes it, and hosts call that at sign-out.
+The service reads it back off the main thread when it starts with no tree, and
+only fills an empty slot: a generation counter stops a restore that finishes
+after a `setBrowseTree` or `clearBrowseTree` from undoing either. iOS does not
+need this, because a CarPlay connection launches the app.
+
+A car's selection reaches the engine through Media3, which checks
+`COMMAND_SET_MEDIA_ITEM` and `COMMAND_PREPARE` on the controller before it
+passes anything on. `onConnect` did not grant them, so every selection in
+Android Auto and Android Automotive was dropped before it reached this code,
+with nothing logged. They are granted now; `onSetMediaItems` resolves the ids
+against the tree (`carSelection`: a track chosen in an album queues the album
+from there, as on iOS), and the player's `setMediaItems` hands the tracks to
+the core instead of a voice.
 
 The Android service follows the same two rules as CarPlay about time. A car
 that asks before there is a tree gets an empty root with empty children,

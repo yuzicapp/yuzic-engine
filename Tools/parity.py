@@ -27,7 +27,12 @@ ANDROID = ROOT / "android/src/main/java/dev/yuzic/engine/YuzicEngineModule.kt"
 # sends events too. Reading only the module reported `onRemoteCommand` as never
 # sent on both platforms, when in fact Android sends it from here and iOS is
 # the one that does not.
-ANDROID_EXTRA = [ROOT / "android/src/main/java/dev/yuzic/engine/PlaybackService.kt"]
+ANDROID_EXTRA = [
+    ROOT / "android/src/main/java/dev/yuzic/engine/PlaybackService.kt",
+    # The playback controller moved out of the module so it runs without the
+    # host's JavaScript, and most of the events are sent from there now.
+    ROOT / "android/src/main/java/dev/yuzic/engine/EngineCore.kt",
+]
 
 # Differences that are deliberate. Listing one here is a claim that the gap is
 # known and documented — not a way to quieten the check. Anything absent from

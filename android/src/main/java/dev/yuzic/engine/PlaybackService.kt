@@ -65,6 +65,14 @@ class PlaybackService : MediaLibraryService() {
     @Volatile
     var browseRoot: BrowseNodeRecord? = null
 
+    /**
+     * Bumped by every `setBrowseTree` and `clearBrowseTree`, so a tree being
+     * restored from disk can tell that the host has spoken since it started
+     * reading, and stand down. Without it a clear that landed mid-restore,
+     * a sign-out's, was undone by the restore finishing.
+     */
+    val browseTreeGeneration = java.util.concurrent.atomic.AtomicInteger()
+
     // Declared above `enabledCommands` because a companion's properties are
     // initialised in declaration order, and the one below reads this one. The
     // other way round it compiles as far as the reader's eye and no further.
@@ -83,21 +91,27 @@ class PlaybackService : MediaLibraryService() {
     var eventSink: ((String, Map<String, Any?>) -> Unit)? = null
 
     /**
-     * Next and previous, handed back to the module.
+     * The playback controller, one per process like the graph and the queue.
      *
-     * `seekToNext` walks the *player's* timeline, and each voice now holds
-     * exactly one track, so forwarding it would do nothing at all — the lock
-     * screen, the notification and the car's buttons would every one of them
-     * be dead. The queue lives in the engine, so the advance has to be asked
-     * of the engine. Null while no module is alive, which is the same
-     * condition `eventSink` is null under and means the same thing: the
-     * service is running without a JS context and must not pretend otherwise.
+     * Here rather than in the module because the module only exists while the
+     * host's JavaScript does, and a car starts this service without it. See
+     * [EngineCore]. Next and previous from the lock screen, the notification
+     * and the car reach it directly now; they used to be handed back to the
+     * module through callbacks that were null whenever no host was running,
+     * which made every one of those buttons dead in exactly the case a car is.
+     */
+    internal val core = EngineCore()
+
+    /**
+     * The tracks behind the media items the last car selection resolved to,
+     * by media id, for [EnginePlayer.setMediaItems] to hand to [core].
+     *
+     * Media3 calls `onSetMediaItems` for the resolution and then
+     * `setMediaItems` on the player with what it returned, and a `MediaItem`
+     * cannot carry a [TrackRecord]. Replaced on every selection.
      */
     @Volatile
-    var onSkipToNext: (() -> Unit)? = null
-
-    @Volatile
-    var onSkipToPrevious: (() -> Unit)? = null
+    var controllerTracks: Map<String, TrackRecord> = emptyMap()
 
     /**
      * Ask the session to re-read `getAvailableCommands`.
@@ -209,6 +223,37 @@ class PlaybackService : MediaLibraryService() {
         librarySession.notifyChildrenChanged(BROWSE_ROOT_ID, count, null)
       }
     }
+
+    restoreBrowseTree()
+    // The advance, the crossfade and the progress clock all hang off this, and
+    // a car can start playback with no host to call `setup`.
+    core.startObservingOnMain()
+  }
+
+  /**
+   * Bring back the last tree the host set, when this process has none.
+   *
+   * The case this is for is a car starting the service in a process that had
+   * died: no JavaScript is running, and none will until someone opens the
+   * app's own screen. See [BrowseTreeStore]. Off the main thread, because a
+   * full tree is thousands of rows to decrypt and parse, and a car that asks
+   * meanwhile gets the stand-in and is told when this lands. A tree the host
+   * sets in the meantime wins: this only fills an empty slot.
+   */
+  private fun restoreBrowseTree() {
+    if (browseRoot != null) return
+    val generation = browseTreeGeneration.get()
+    val store = BrowseTreeStore.forContext(this)
+    val main = android.os.Handler(android.os.Looper.getMainLooper())
+    Thread {
+      val saved = store.load() ?: return@Thread
+      val restored = buildBrowseTree(saved.first, saved.second)
+      main.post {
+        if (browseRoot != null || browseTreeGeneration.get() != generation) return@post
+        browseRoot = restored
+        onBrowseTreeChanged?.invoke()
+      }
+    }.apply { name = "yuzic-engine-browse-restore" }.start()
   }
 
   override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
@@ -229,6 +274,7 @@ class PlaybackService : MediaLibraryService() {
   override fun onDestroy() {
     onCommandsMayHaveChanged = null
     onBrowseTreeChanged = null
+    core.serviceStopping()
     session?.run {
       player.release()
       release()
@@ -270,6 +316,14 @@ class PlaybackService : MediaLibraryService() {
         if ("seek" in enabledCommands) add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
         if ("skipForward" in enabledCommands) add(Player.COMMAND_SEEK_FORWARD)
         if ("skipBackward" in enabledCommands) add(Player.COMMAND_SEEK_BACK)
+        // How a car plays what it browsed: Media3 checks these before it will
+        // pass a selection on at all, and with them missing every selection
+        // in Android Auto and Android Automotive was dropped without a word
+        // before it reached this service. Granted now that `onSetMediaItems`
+        // resolves a selection and the engine plays it.
+        add(Player.COMMAND_SET_MEDIA_ITEM)
+        add(Player.COMMAND_CHANGE_MEDIA_ITEMS)
+        add(Player.COMMAND_PREPARE)
       }.build()
 
       return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
@@ -328,6 +382,46 @@ class PlaybackService : MediaLibraryService() {
       return Futures.immediateFuture(
         LibraryResult.ofItemList(ImmutableList.copyOf(children.subList(from, to)), params)
       )
+    }
+
+    /**
+     * A car's selection, resolved against the tree into what to play.
+     *
+     * The car sends ids and nothing else; a legacy controller's play-from-id
+     * arrives here too, as a single item with no start index. See
+     * [carSelection] for the rules. The items returned carry the tracks' own
+     * ids, and [controllerTracks] carries the tracks, because Media3 hands the
+     * items straight to the player's `setMediaItems` next.
+     */
+    override fun onSetMediaItems(
+      mediaSession: MediaSession,
+      controller: MediaSession.ControllerInfo,
+      mediaItems: MutableList<MediaItem>,
+      startIndex: Int,
+      startPositionMs: Long,
+    ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+      val chosen = carSelection(browseRoot, mediaItems.map { it.mediaId }, startIndex.coerceAtLeast(0))
+        ?: return Futures.immediateFailedFuture(UnsupportedOperationException("nothing playable was chosen"))
+      val (tracks, at) = chosen
+      controllerTracks = tracks.associateBy { it.id }
+      val position = if (startPositionMs == C.TIME_UNSET) 0L else startPositionMs
+      return Futures.immediateFuture(
+        MediaSession.MediaItemsWithStartPosition(tracks.map { it.toNowPlayingMediaItem() }, at, position)
+      )
+    }
+
+    /** Resolved the same way, for a controller that adds rather than replaces. */
+    override fun onAddMediaItems(
+      mediaSession: MediaSession,
+      controller: MediaSession.ControllerInfo,
+      mediaItems: MutableList<MediaItem>,
+    ): ListenableFuture<MutableList<MediaItem>> {
+      val tracks = mediaItems.mapNotNull { browseNode(browseRoot, it.mediaId)?.playable }
+      if (tracks.isEmpty()) {
+        return Futures.immediateFailedFuture(UnsupportedOperationException("nothing playable was chosen"))
+      }
+      controllerTracks = controllerTracks + tracks.associateBy { it.id }
+      return Futures.immediateFuture(tracks.map { it.toNowPlayingMediaItem() }.toMutableList())
     }
 
     override fun onGetItem(
@@ -479,11 +573,46 @@ private class EnginePlayer(private val graph: AudioGraph) :
   override fun seekToPreviousMediaItem() = askEngineToSkipPrevious()
 
   private fun askEngineToSkipNext() {
-    PlaybackService.onSkipToNext?.invoke()
+    PlaybackService.core.skipToNext()
   }
 
   private fun askEngineToSkipPrevious() {
-    PlaybackService.onSkipToPrevious?.invoke()
+    PlaybackService.core.skipToPrevious()
+  }
+
+  // A car's selection, after `onSetMediaItems` resolved it. The engine owns the
+  // queue and each voice holds one track, so the list is handed to the engine
+  // rather than to a voice: set on the voice, it would play the first track
+  // and then pause, because the voices are told not to advance by themselves,
+  // and none of the engine's queue, crossfade or events would know about it.
+  override fun setMediaItems(mediaItems: MutableList<MediaItem>, startIndex: Int, startPositionMs: Long) =
+    handToEngine(mediaItems, startIndex, if (startPositionMs == C.TIME_UNSET) 0L else startPositionMs)
+
+  override fun setMediaItems(mediaItems: MutableList<MediaItem>, resetPosition: Boolean) =
+    handToEngine(mediaItems, 0, 0L)
+
+  override fun setMediaItems(mediaItems: MutableList<MediaItem>) = handToEngine(mediaItems, 0, 0L)
+
+  override fun setMediaItem(mediaItem: MediaItem) = handToEngine(mutableListOf(mediaItem), 0, 0L)
+
+  override fun setMediaItem(mediaItem: MediaItem, startPositionMs: Long) =
+    handToEngine(mutableListOf(mediaItem), 0, startPositionMs)
+
+  override fun setMediaItem(mediaItem: MediaItem, resetPosition: Boolean) =
+    handToEngine(mutableListOf(mediaItem), 0, 0L)
+
+  private fun handToEngine(items: List<MediaItem>, startIndex: Int, positionMs: Long) {
+    val known = PlaybackService.controllerTracks
+    val tracks = items.mapNotNull { known[it.mediaId] }
+    if (tracks.isEmpty()) return
+    PlaybackService.core.setQueueFromController(tracks, startIndex.coerceIn(0, tracks.size - 1), positionMs)
+  }
+
+  // The engine prepares the track it loads. Forwarded, this would reach the
+  // wrapped voice, which after a crossfade is the idle one holding a stopped
+  // track with `playWhenReady` still set, and preparing it would start it.
+  override fun prepare() {
+    if (active.playbackState == Player.STATE_IDLE && active.mediaItemCount > 0) active.prepare()
   }
 
   /**

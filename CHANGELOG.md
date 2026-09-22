@@ -9,6 +9,37 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Added
+
+- **`clearBrowseTree()` in the JavaScript API.** Both native modules have had
+  it; the facade never exposed it. Call it when the library stops being the
+  listener's to show, at sign-out especially, because on Android it also
+  deletes the copy below.
+
+### Fixed
+
+- **Android: a car could not play anything.** Media3 passes a controller's
+  selection on only if the controller holds `COMMAND_SET_MEDIA_ITEM` and
+  `COMMAND_PREPARE`, and the session never granted them, so every selection in
+  Android Auto and Android Automotive was dropped before it reached the engine,
+  with nothing logged. They are granted now, `onSetMediaItems` resolves the
+  car's ids against the tree (a track chosen in an album queues the album from
+  that track, as on iOS), and the tracks go into the engine's own queue.
+- **Android: a car with the app closed had no library and no player.** A car
+  starts the media service without starting the host's JavaScript, and the
+  playback controller lived in the Expo module, which only exists with it. The
+  controller is now `EngineCore`, owned by the service, and the module is a
+  bridge to it: a car's selection plays, next and previous work, and tracks
+  advance and crossfade with no JavaScript running. The last browse tree is
+  kept across process death, encrypted with a key in the Android Keystore and
+  excluded from backups, so a car arriving at a dead process still shows the
+  library.
+- **Android: a host that attached while a car was playing showed a play
+  button.** State is sent on a change, and the controller now outlives any one
+  host, so attaching sends the current state once.
+
 ## [1.0.17]
 
 ### Fixed

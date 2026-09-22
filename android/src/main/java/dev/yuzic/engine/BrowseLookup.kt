@@ -64,3 +64,106 @@ internal fun findBrowseNode(node: BrowseNodeRecord?, id: String): BrowseNodeReco
   }
   return null
 }
+
+/** The same cap iOS uses, for the same reason: a bad parent id must not recurse forever. */
+internal const val BROWSE_MAX_DEPTH = 16
+
+/**
+ * Rebuild the nested tree from the flat list, mirroring `BrowseTree.build`
+ * in `ios/Core/BrowseTree.swift` rule for rule.
+ *
+ * The rules are the ones architecture.md §11 states, and each is a decision
+ * rather than a detail:
+ *
+ * - **Duplicate ids keep the first.** Selection resolves by id, so the
+ *   alternative is a car playing something other than what it displayed.
+ * - **Orphans are dropped, not promoted.** A half-loaded library should show
+ *   less, not show a flat pile of tracks where albums were expected. Falling
+ *   out of the grouping rather than being handled: a node whose parent is
+ *   not in `childrenByParent` is simply never assembled.
+ * - **Depth is capped**, at the same 16 as iOS, so a tree that references
+ *   itself through a bad parent id cannot recurse forever.
+ */
+internal fun buildBrowseTree(title: String, flat: List<FlatBrowseNodeRecord>): BrowseNodeRecord {
+  val seen = mutableSetOf<String>()
+  val childrenByParent = mutableMapOf<String, MutableList<FlatBrowseNodeRecord>>()
+  val roots = mutableListOf<FlatBrowseNodeRecord>()
+
+  for (node in flat) {
+    if (!seen.add(node.id)) continue
+    val parentId = node.parentId
+    if (parentId != null) {
+      childrenByParent.getOrPut(parentId) { mutableListOf() }.add(node)
+    } else {
+      roots.add(node)
+    }
+  }
+
+  fun assemble(node: FlatBrowseNodeRecord, depth: Int): BrowseNodeRecord =
+    BrowseNodeRecord().apply {
+      id = node.id
+      // Qualified: the enclosing function's `title` parameter is nearer in
+      // scope than this record's field, and is a val.
+      this.title = node.title
+      subtitle = node.subtitle
+      artworkUri = node.artworkUri
+      playable = node.playable
+      children = if (depth >= BROWSE_MAX_DEPTH) emptyList()
+      else childrenByParent[node.id].orEmpty().map { assemble(it, depth + 1) }
+    }
+
+  return BrowseNodeRecord().apply {
+    id = BROWSE_ROOT_ID
+    this.title = title
+    children = roots.map { assemble(it, 1) }
+  }
+}
+
+/**
+ * What a car's selection plays: the tracks, in order, and where to start.
+ *
+ * A car hands over ids from the tree, and nothing else. Resolved here, against
+ * the tree, rather than trusted, so a stale id plays nothing instead of
+ * something else.
+ *
+ * - **A track chosen inside an album or playlist queues all of it and starts
+ *   there**, as on iOS (docs/architecture.md §11): the album is the context
+ *   the driver believes they are in, and they cannot pick a follow-up while
+ *   moving.
+ * - **A folder chosen to play plays its tracks from the top.**
+ * - **Several ids play as given**, from [startIndex], dropping any the tree
+ *   does not know.
+ *
+ * Null when nothing chosen can be played.
+ */
+internal fun carSelection(
+  root: BrowseNodeRecord?,
+  ids: List<String>,
+  startIndex: Int,
+): Pair<List<TrackRecord>, Int>? {
+  if (root == null || ids.isEmpty()) return null
+  if (ids.size == 1) {
+    val id = ids.single()
+    val node = findBrowseNode(root, id) ?: return null
+    if (node.playable == null) {
+      val tracks = node.children.orEmpty().mapNotNull { it.playable }
+      return if (tracks.isEmpty()) null else tracks to 0
+    }
+    val siblings = findParentOf(root, id)?.children.orEmpty().filter { it.playable != null }
+    val at = siblings.indexOfFirst { it.id == id }
+    if (at < 0) return listOf(node.playable!!) to 0
+    return siblings.map { it.playable!! } to at
+  }
+  val tracks = ids.mapNotNull { findBrowseNode(root, it)?.playable }
+  if (tracks.isEmpty()) return null
+  return tracks to startIndex.coerceIn(0, tracks.size - 1)
+}
+
+/** The node whose children include [id], or null. Depth-first, like [findBrowseNode]. */
+internal fun findParentOf(node: BrowseNodeRecord, id: String): BrowseNodeRecord? {
+  node.children?.forEach { child ->
+    if (child.id == id) return node
+    findParentOf(child, id)?.let { return it }
+  }
+  return null
+}

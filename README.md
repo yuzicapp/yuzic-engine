@@ -151,7 +151,13 @@ which makes a phone build uninstallable on phones.
 To try Android without a car: Android Auto's Desktop Head Unit needs a real
 phone, and Play will not install Android Auto on an emulator. An Android
 Automotive emulator image works: install the app and pick it from the media
-app's source list.
+app's source list. It exercises the case that matters most, too: force-stop
+the app and open the car's media app, and the library and playback both work
+with no JavaScript running.
+
+Call `clearBrowseTree()` at sign-out. On Android the engine keeps the last
+tree, encrypted, so that a car can show it with the app closed, and clearing
+is what deletes it.
 
 ## Building and testing
 

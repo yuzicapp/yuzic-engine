@@ -180,6 +180,12 @@ export interface AudioEngine {
    * reason as the queue: the car may ask while JS is asleep.
    */
   setBrowseTree(root: BrowseNode): Promise<void>;
+  /**
+   * Take the tree away. On Android this also deletes the copy kept for a car
+   * that starts the service with no JavaScript running, so call it when the
+   * library is no longer the listener's to show, at sign-out most of all.
+   */
+  clearBrowseTree(): Promise<void>;
   /** Which remote controls to advertise on the lock screen and in the car. */
   setCommands(commands: RemoteCommand[]): Promise<void>;
 

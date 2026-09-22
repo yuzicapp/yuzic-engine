@@ -50,4 +50,7 @@ dependencies {
   implementation "androidx.media3:media3-datasource:${MEDIA3_VERSION}"
 
   testImplementation 'junit:junit:4.13.2'
+  // A real org.json for the JVM tests. The one in android.jar is a stub that
+  // throws, and BrowseTreeCodec is plain JSON worth testing without a device.
+  testImplementation 'org.json:json:20240303'
 }
