@@ -11,21 +11,51 @@ behaviour does not.
 
 ## [Unreleased]
 
-### Removed
+Groundwork for using the engine outside yuzic. With no options set, nothing
+here changes what yuzic gets. The breaking changes are to types only; no
+behaviour a host relied on is removed.
 
-- **Breaking for types only:** `EngineSetupOptions.cache`,
-  `EngineSetupOptions.android` and `CacheOptions.preloadCount`. Neither
-  platform ever read them, so removing them changes no behaviour, but a host
-  that sets one now gets a type error instead of silence. Size the cache with
-  `configureCache` (iOS) and drop the other two.
+### Breaking
+
+- **Removed `EngineSetupOptions.cache`, `EngineSetupOptions.android` and
+  `CacheOptions.preloadCount`.** Neither platform ever read them, so removing
+  them changes no behaviour, but a host that sets one now gets a type error
+  instead of silence. Size the cache with `configureCache` (iOS) and drop the
+  other two.
+- **The `error` event's `code` is typed as `EngineErrorCode`**,
+  `'PLAYBACK_FAILED' | 'CROSSFADE_DISABLED'`, the two codes either platform
+  sends, rather than `string`. A comparison against any other string is now a
+  type error, and was always dead code.
+- **Peer dependencies have real ranges:** `expo-modules-core` and
+  `@expo/config-plugins` 55 or later, `react-native` 0.83 or later. The
+  `react` peer is gone; nothing in the package imports React.
 
 ### Added
 
+- Config plugin options `carplay`, `androidAuto` and `automotive`, each true
+  by default. Turning one off leaves out the CarPlay scene, or writes a
+  `tools:node="remove"` marker for the Android car declarations, which stay in
+  the library manifest. Both take effect on a prebuild.
+- `Track.seekReconnect`, the query parameter iOS uses to pick a broken stream
+  with no byte ranges back up. Absent keeps today's Subsonic `timeOffset`;
+  another server names its own, and `{ queryParam: null }` turns reconnection
+  off so the failure is reported instead. Android reads nothing here: it
+  reopens the same URL at the position reached.
 - iOS: the `skipForward` and `skipBackward` remote commands. `setCommands`
   accepted both and dropped them by name. They jump 15 seconds forward and
   5 back, which are Media3's defaults, so the buttons agree across platforms.
+- `EngineErrorCode` is exported.
 - `Tools/parity.py` also compares string-union values: a value the
   TypeScript API offers that a platform never reads now fails the check.
+
+### Changed
+
+- Android: before a host sets a browse tree, the car's empty root is titled
+  with the host app's label instead of "yuzic", as CarPlay already was.
+- `clientCertificateRequest` is marked experimental. It may change, or move
+  out of this package, in a minor release.
+- Test files and the Kotlin test fixtures are no longer published, and the
+  package description no longer names yuzic.
 
 ### Fixed
 
