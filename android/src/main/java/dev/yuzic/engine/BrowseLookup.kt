@@ -23,15 +23,25 @@ internal const val BROWSE_ROOT_ID = "root"
  * sent when the tree arrived reached nobody, and the library stayed empty
  * until the driver left and came back.
  */
-internal fun browseNode(root: BrowseNodeRecord?, id: String): BrowseNodeRecord? {
-  if (root == null) return if (id == BROWSE_ROOT_ID) standInRoot() else null
+internal fun browseNode(root: BrowseNodeRecord?, id: String, standInTitle: String): BrowseNodeRecord? {
+  if (root == null) return if (id == BROWSE_ROOT_ID) standInRoot(standInTitle) else null
   return findBrowseNode(root, id)
 }
 
-/** The root served before the host has set a tree: browsable and empty. */
-internal fun standInRoot() = BrowseNodeRecord().apply {
+/**
+ * The root served before the host has set a tree: browsable and empty.
+ *
+ * [title] is the host app's own label, passed in by the service. It used to
+ * be a fixed "yuzic", which every other app using the engine would have shown
+ * in the car too. It is not a `setup` option because the car usually asks
+ * for this root in a process where no JavaScript has run, so `setup` has not
+ * been called and an option there would never arrive. The label is the one
+ * name the host has already supplied, and it is what CarPlay shows in the
+ * same place on iOS.
+ */
+internal fun standInRoot(title: String) = BrowseNodeRecord().apply {
   id = BROWSE_ROOT_ID
-  title = "yuzic"
+  this.title = title
   children = emptyList()
 }
 
