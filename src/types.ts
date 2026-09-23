@@ -69,6 +69,24 @@ export interface Track {
    * preparation and end-of-track prediction — all three assume a finish line.
    */
   continuous?: boolean;
+  /**
+   * How to pick a stream back up after it breaks, when the server offered no
+   * byte ranges and so the lost bytes cannot simply be asked for again. The
+   * engine requests the track anew with this query parameter set to the
+   * second reached, replacing any value already in the URL.
+   *
+   * Absent means `{ queryParam: 'timeOffset' }`, which is Subsonic's (and so
+   * Navidrome's) spelling. That default is kept for compatibility, and it is
+   * the wrong one for any other server: a parameter the server ignores
+   * restarts the track from the top while the reported position carries on.
+   * Pass `{ queryParam: null }` to turn reconnection off, so a broken stream
+   * is reported as an `error` event instead.
+   *
+   * iOS only. Android reopens the same URL at the position reached and lets
+   * Media3 find its way there, so it sends no parameter and reads nothing
+   * here.
+   */
+  seekReconnect?: { queryParam: string | null };
 }
 
 export type RepeatMode = 'off' | 'one' | 'all';
@@ -192,14 +210,13 @@ export interface ReplayGainOptions {
  */
 export type SampleRateMode = 'fixed' | 'match-source';
 
+/**
+ * There is no preload count. One was declared here and neither platform read
+ * it. The engine prepares the next track in the queue on its own, which is
+ * the one a crossfade or a gapless join needs.
+ */
 export interface CacheOptions {
   maxBytes: number;
-  /**
-   * How many upcoming tracks to fetch ahead. Preloading is what makes gapless
-   * and crossfade possible at all — you cannot overlap into a track you have
-   * not started fetching.
-   */
-  preloadCount: number;
 }
 
 export interface CacheStats {
@@ -266,18 +283,27 @@ export type BrowseIcon =
 
 export type BrowseAction = 'shuffle';
 
+/**
+ * The codes an `error` event carries, and every one either platform sends.
+ *
+ * `PLAYBACK_FAILED`: a track could not be opened or stopped short, and the
+ * message says which. `CROSSFADE_DISABLED`: crossfade was switched off because
+ * `setSampleRateMode('match-source')` cannot coexist with it.
+ */
+export type EngineErrorCode = 'PLAYBACK_FAILED' | 'CROSSFADE_DISABLED';
+
 export type EngineEvent =
   | { type: 'stateChange'; state: PlaybackState }
   /**
    * Fired at the crossover midpoint when crossfading, so it lines up with
-   * what the listener is actually hearing. `listenedSec` is the outgoing
-   * track's played time *including* its fade-out, which is what a scrobble
-   * threshold has to be measured against.
+   * what the listener is actually hearing. `previousListenedSec` is the
+   * outgoing track's played time *including* its fade-out, which is what a
+   * scrobble threshold has to be measured against.
    */
   | { type: 'trackChange'; index: number; id: MediaId | null; previousListenedSec?: number }
   | { type: 'progress'; progress: Progress }
   | { type: 'queueChange' }
-  | { type: 'error'; code: string; message: string; id?: MediaId }
+  | { type: 'error'; code: EngineErrorCode; message: string; id?: MediaId }
   /**
    * A remote command the engine could not handle alone — the car asked for
    * something from the browse tree, say. The host answers by driving the

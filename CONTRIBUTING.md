@@ -96,11 +96,11 @@ and no `settings.gradle`, because an Expo module is compiled by the app that
 consumes it — `expoAutolinking.useExpoModules()` in the app's
 `android/settings.gradle` is what pulls this directory into a build at all. So
 `android/src/test/` runs as `:yuzic-engine:testDebugUnitTest` through the
-*app's* `./gradlew`, against whatever commit the app has pinned. There is a
-Kotlin unit-test target now (the mutual-TLS import, its rejection cases and its
-clearing); it is reached that way rather than standalone.
+*app's* `./gradlew`, against whatever commit the app has pinned, and is
+reached that way rather than standalone.
 
-That is also why CI has no Android job yet. Running one means checking out the
-app, repointing its `yuzic-engine` dependency at the commit under test, and
-building through it — worth doing, and not free, since it drags the whole app's
-dependency tree and the NDK into this repository's CI.
+CI does this too. Its Android job checks out the app, repoints the app's
+`yuzic-engine` dependency at the commit under test, and runs the unit tests
+and an assemble through it. That drags the whole app's dependency tree and the
+NDK into this repository's CI, which is why it is the slowest job, and it
+proves compilation and unit behaviour, not behaviour on a device.

@@ -533,6 +533,13 @@ struct TrackRecord: Record {
   @Field var replayGainDb: Double?
   @Field var replayGainPeak: Double?
   @Field var continuous: Bool = false
+  /// Absent means the default parameter; present with a nil `queryParam`
+  /// means none. See `Track.seekReconnect` in src/types.ts.
+  @Field var seekReconnect: SeekReconnectRecord?
+}
+
+struct SeekReconnectRecord: Record {
+  @Field var queryParam: String?
 }
 
 /**
@@ -576,9 +583,6 @@ struct ClientCertificateRequestRecord: Record {
 
 struct CacheOptionsRecord: Record {
   @Field var maxBytes: Double = Double(DiskCache.defaultMaxBytes)
-  /// Carried because `CacheOptions` declares it, and honoured by the queue's
-  /// preload rather than by the cache — the cache stores what it is given.
-  @Field var preloadCount: Int = 2
 }
 
 struct ReplayGainRecord: Record {
@@ -621,6 +625,12 @@ extension Track {
     if !headers.isEmpty { out["headers"] = headers }
     if let replayGainDb { out["replayGainDb"] = replayGainDb }
     if let replayGainPeak { out["replayGainPeak"] = replayGainPeak }
+    // Only when it differs from the default, so an ordinary queue reads back
+    // exactly as it was set.
+    if seekReconnectParam != Track.defaultSeekReconnectParam {
+      let param: Any = seekReconnectParam ?? NSNull()
+      out["seekReconnect"] = ["queryParam": param]
+    }
     return out
   }
 }
@@ -646,7 +656,8 @@ extension TrackRecord {
       followsPrevious: followsPrevious,
       replayGainDb: replayGainDb,
       replayGainPeak: replayGainPeak,
-      continuous: continuous
+      continuous: continuous,
+      seekReconnectParam: seekReconnect.map { $0.queryParam } ?? Track.defaultSeekReconnectParam
     )
   }
 }

@@ -100,6 +100,26 @@ public struct NowPlayingInfo {
   public static func playbackState(for snapshot: Snapshot) -> MPNowPlayingPlaybackState {
     snapshot.isPlaying || snapshot.isBuffering ? .playing : .paused
   }
+
+  /// The skip intervals the lock screen and the car draw on their buttons.
+  /// Media3's defaults, so the same button moves the same distance on both
+  /// platforms: Android advertises its player's own increments, which are
+  /// these unless the player was built with others.
+  public static let skipForwardSec: Double = 15
+  public static let skipBackwardSec: Double = 5
+
+  /**
+   Where a skip of `delta` seconds lands.
+
+   Clamped to the track, because a skip back near the start should restart
+   rather than fail, and a skip forward near the end should reach the end
+   rather than ask the reader for a frame that does not exist. An unknown
+   duration clamps only at zero.
+   */
+  public static func skipTarget(from positionSec: Double, by delta: Double, durationSec: Double) -> Double {
+    let target = max(0, positionSec + delta)
+    return durationSec > 0 ? min(target, durationSec) : target
+  }
 }
 
 /// The commands to advertise. A control that is offered but does nothing is
@@ -111,6 +131,8 @@ public struct RemoteCommandHandlers {
   public var next: (() -> Void)?
   public var previous: (() -> Void)?
   public var seek: ((Double) -> Void)?
+  /// A relative seek, in seconds: positive for skip forward, negative for back.
+  public var skipBy: ((Double) -> Void)?
   public var stop: (() -> Void)?
 
   public init() {}
@@ -270,6 +292,10 @@ public final class NowPlayingCenter {
     commands.previousTrackCommand.isEnabled = wanted.contains(.previous)
     commands.changePlaybackPositionCommand.isEnabled = wanted.contains(.seek)
     commands.stopCommand.isEnabled = wanted.contains(.stop)
+    commands.skipForwardCommand.isEnabled = wanted.contains(.skipForward)
+    commands.skipBackwardCommand.isEnabled = wanted.contains(.skipBackward)
+    commands.skipForwardCommand.preferredIntervals = [NSNumber(value: NowPlayingInfo.skipForwardSec)]
+    commands.skipBackwardCommand.preferredIntervals = [NSNumber(value: NowPlayingInfo.skipBackwardSec)]
 
     commands.playCommand.addTarget { [weak self] _ in
       self?.handlers.play?(); return .success
@@ -300,6 +326,19 @@ public final class NowPlayingCenter {
       self?.handlers.seek?(event.positionTime)
       return .success
     }
+    // The event carries the interval the system actually drew, which is the
+    // preferred one above unless the system chose otherwise. Honouring the
+    // event keeps the button and the jump in agreement either way.
+    commands.skipForwardCommand.addTarget { [weak self] event in
+      let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? NowPlayingInfo.skipForwardSec
+      self?.handlers.skipBy?(interval)
+      return .success
+    }
+    commands.skipBackwardCommand.addTarget { [weak self] event in
+      let interval = (event as? MPSkipIntervalCommandEvent)?.interval ?? NowPlayingInfo.skipBackwardSec
+      self?.handlers.skipBy?(-interval)
+      return .success
+    }
   }
 
   private func removeAllTargets() {
@@ -310,6 +349,8 @@ public final class NowPlayingCenter {
     commands.previousTrackCommand.removeTarget(nil)
     commands.stopCommand.removeTarget(nil)
     commands.changePlaybackPositionCommand.removeTarget(nil)
+    commands.skipForwardCommand.removeTarget(nil)
+    commands.skipBackwardCommand.removeTarget(nil)
   }
 }
 
@@ -319,5 +360,7 @@ public enum RemoteCommand: String, Hashable {
   case next
   case previous
   case seek
+  case skipForward
+  case skipBackward
   case stop
 }

@@ -119,8 +119,9 @@ const base: AudioEngine = Object.assign(Object.create(native), {
  * The facade is `Object.create(native)`, so a method a platform has not
  * implemented is simply an absent property, and calling it throws
  * `X is not a function` — indistinguishable from a typo, a bad import, or a
- * native module that failed to link. Android is currently missing eleven of
- * the methods listed above, so this is the common case rather than an edge.
+ * native module that failed to link. Android is missing `configureCache`
+ * today, and was once missing eleven of the methods above, which is when
+ * this was written.
  *
  * The rejection is deliberately *asynchronous*, matching every other method
  * here: a caller that already handles a failed promise handles this too, and
@@ -129,8 +130,8 @@ const base: AudioEngine = Object.assign(Object.create(native), {
  *
  * This does not make an unimplemented method work. It makes "not built yet"
  * distinguishable from "built wrong" at the boundary. `setCrossfade` on
- * Android is the argument for caring: it exists, accepts, and silently does
- * nothing, and no amount of reading the call site reveals that — the only way
+ * Android was the argument for caring: it existed, accepted, and silently did
+ * nothing, and no amount of reading the call site revealed that. The only way
  * anyone found out was watching logcat for a decoder that never appeared.
  */
 export const YuzicEngine: AudioEngine = new Proxy(base, {

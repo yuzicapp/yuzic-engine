@@ -59,6 +59,8 @@ album/track/auto modes and clipping protection.
 **Sources.** Local files, and HTTP streaming with auth in query parameters or
 headers. Mutual TLS can import a PKCS#12 identity in memory and presents the
 same identity for ordinary server API requests and Media3/Core Audio streaming.
+The API half, `clientCertificateRequest`, is experimental: it is an HTTP
+client rather than audio, and may change or move out in a minor release.
 Remote audio is fetched through a byte source with an on-device LRU
 cache keyed by media id — not by URL, because Subsonic and Jellyfin hand out
 URLs carrying a token that rotates, and keying on those re-downloads the same
@@ -128,6 +130,18 @@ screen never appears and nothing logs to say why.
 { "expo": { "plugins": ["yuzic-engine"] } }
 ```
 
+Every car surface is on by default. An app that does not want one turns it
+off by name:
+
+```json
+["yuzic-engine", { "carplay": false, "androidAuto": false, "automotive": false }]
+```
+
+`carplay: false` leaves out the CarPlay scene. The Android car declarations are
+in the library's own manifest (see below), so `androidAuto: false` and
+`automotive: false` write `tools:node="remove"` markers into your manifest
+instead. Both take effect on a prebuild.
+
 Two things the plugin cannot do for you:
 
 1. **The `com.apple.developer.carplay-audio` entitlement is granted by Apple per
@@ -172,7 +186,7 @@ If your host starts React Native only from its phone scene, start it when a
 npm install
 npm run typecheck    # both tsconfigs — see below
 npm test             # the TypeScript side
-swift test           # the iOS core: 390 tests, no Xcode project, no app
+swift test           # the iOS core, about 400 tests, no Xcode project, no app
 ```
 
 `ios/Core` is a SwiftPM target as well as part of the pod, which is what lets

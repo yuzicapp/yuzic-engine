@@ -275,17 +275,20 @@ public final class HTTPStreamProducer: NSObject, StreamProducer, URLSessionDataD
 /// Builds the URL for restarting a transcoded stream partway in.
 ///
 /// Subsonic's answer to seeking when ranges are unavailable, confirmed working
-/// against a real server. The result is a *different* stream, so whoever calls
-/// this has to replace the source and reopen the reader rather than treating it
-/// as a seek.
-public func streamURL(base: URL, timeOffsetSeconds: Int) -> URL {
+/// against a real server, and the default. `param` is the track's
+/// `seekReconnectParam`, so a server that spells it differently can say so.
+/// The result is a *different* stream, so whoever calls this has to replace
+/// the source and reopen the reader rather than treating it as a seek.
+public func streamURL(
+  base: URL, timeOffsetSeconds: Int, param: String = Track.defaultSeekReconnectParam
+) -> URL {
   guard timeOffsetSeconds > 0,
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
     return base
   }
   var items = components.queryItems ?? []
-  items.removeAll { $0.name == "timeOffset" }
-  items.append(URLQueryItem(name: "timeOffset", value: String(timeOffsetSeconds)))
+  items.removeAll { $0.name == param }
+  items.append(URLQueryItem(name: param, value: String(timeOffsetSeconds)))
   components.queryItems = items
   return components.url ?? base
 }

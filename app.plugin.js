@@ -17,7 +17,30 @@ const {
  * Info.plist entry is already present there today — but it was put there by
  * @rntp/player, and it leaves with it. This plugin is what replaces that, and
  * until a prebuild happens the existing entry has to stay.
+ *
+ * Options, all defaulting to true so that a host listing the plugin with no
+ * options keeps every car surface it had:
+ *
+ *   ["yuzic-engine", { "carplay": false, "androidAuto": false, "automotive": false }]
+ *
+ * - `carplay: false` leaves out the CarPlay scene.
+ * - `androidAuto: false` and `automotive: false` remove the Android car
+ *   declarations. Those live in the library's own manifest, so that they
+ *   reach a host that commits its `android/` directory without a prebuild,
+ *   and turning one off therefore writes a `tools:node="remove"` marker into
+ *   the host's manifest rather than leaving something out. The marker only
+ *   lands on a prebuild.
  */
+
+/** Every option on unless the host turned it off by name. */
+function resolveOptions(props) {
+  const options = props ?? {};
+  return {
+    carplay: options.carplay !== false,
+    androidAuto: options.androidAuto !== false,
+    automotive: options.automotive !== false,
+  };
+}
 
 /** iOS: keep playing when the screen locks. Pure, over the plist object. */
 function addBackgroundAudio(infoPlist) {
@@ -60,9 +83,28 @@ function addCarPlayScene(infoPlist) {
   return infoPlist;
 }
 
-function withBackgroundAudio(config) {
+/**
+ * iOS: take this plugin's CarPlay scene back out, for a host that turned
+ * CarPlay off after a prebuild had already written it. Scenes the host
+ * declared itself are left alone.
+ */
+function removeCarPlayScene(infoPlist) {
+  const roles = infoPlist.UIApplicationSceneManifest?.UISceneConfigurations;
+  const carPlay = roles?.CPTemplateApplicationSceneSessionRoleApplication;
+  if (!carPlay) return infoPlist;
+  const kept = carPlay.filter(scene => scene.UISceneConfigurationName !== 'YuzicEngineCarPlay');
+  if (kept.length) {
+    roles.CPTemplateApplicationSceneSessionRoleApplication = kept;
+  } else {
+    delete roles.CPTemplateApplicationSceneSessionRoleApplication;
+  }
+  return infoPlist;
+}
+
+function withBackgroundAudio(config, options) {
   return withInfoPlist(config, config => {
-    config.modResults = addCarPlayScene(addBackgroundAudio(config.modResults));
+    const plist = addBackgroundAudio(config.modResults);
+    config.modResults = options.carplay ? addCarPlayScene(plist) : removeCarPlayScene(plist);
     return config;
   });
 }
@@ -122,16 +164,66 @@ function addPlaybackService(manifest, application) {
     return manifest;
 }
 
-function withPlaybackService(config) {
+/**
+ * Android: opt out of the car declarations the library manifest makes.
+ *
+ * Android Auto reads one application key. Android Automotive reads another,
+ * and also needs the opt-in on the media service, so `automotive: false`
+ * removes both of those. A declaration that is on is left to the library
+ * manifest, and any removal marker from an earlier run is taken back out.
+ *
+ * The service and permissions `addPlaybackService` writes are also in the
+ * library manifest, with the same attributes, so the merged result is the
+ * same either way. They are left in place here: dropping them is only safe
+ * once a merged manifest from a host has been compared before and after.
+ */
+const CAR_KEYS = {
+  androidAuto: 'com.google.android.gms.car.application',
+  automotive: 'com.android.automotive',
+};
+const LAUNCHABLE = 'androidx.car.app.launchable';
+
+function setRemoved(entries, name, removed) {
+  const others = entries.filter(entry => entry.$?.['android:name'] !== name);
+  const own = entries.filter(entry => entry.$?.['android:name'] === name);
+  if (removed) return [...others, { $: { 'android:name': name, 'tools:node': 'remove' } }];
+  // On: keep a declaration the host wrote itself, drop only a marker.
+  return [...others, ...own.filter(entry => entry.$['tools:node'] !== 'remove')];
+}
+
+function configureCarDeclarations(manifest, application, options) {
+  const anyOff = !options.androidAuto || !options.automotive;
+  if (anyOff) AndroidConfig.Manifest.ensureToolsAvailable(manifest);
+
+  let metaData = application['meta-data'] ?? [];
+  metaData = setRemoved(metaData, CAR_KEYS.androidAuto, !options.androidAuto);
+  metaData = setRemoved(metaData, CAR_KEYS.automotive, !options.automotive);
+  if (metaData.length) application['meta-data'] = metaData;
+  else delete application['meta-data'];
+
+  const service = (application.service ?? []).find(
+    entry => entry.$?.['android:name'] === 'dev.yuzic.engine.PlaybackService'
+  );
+  if (service) {
+    const serviceMetaData = setRemoved(service['meta-data'] ?? [], LAUNCHABLE, !options.automotive);
+    if (serviceMetaData.length) service['meta-data'] = serviceMetaData;
+    else delete service['meta-data'];
+  }
+  return manifest;
+}
+
+function withPlaybackService(config, options) {
   return withAndroidManifest(config, config => {
     const application = AndroidConfig.Manifest.getMainApplicationOrThrow(config.modResults);
     addPlaybackService(config.modResults, application);
+    configureCarDeclarations(config.modResults, application, options);
     return config;
   });
 }
 
-module.exports = function withYuzicEngine(config) {
-  return withPlaybackService(withBackgroundAudio(config));
+module.exports = function withYuzicEngine(config, props) {
+  const options = resolveOptions(props);
+  return withPlaybackService(withBackgroundAudio(config, options), options);
 };
 
 // The two transformations, separately, so they can be tested without standing
@@ -141,3 +233,6 @@ module.exports = function withYuzicEngine(config) {
 module.exports.addBackgroundAudio = addBackgroundAudio;
 module.exports.addCarPlayScene = addCarPlayScene;
 module.exports.addPlaybackService = addPlaybackService;
+module.exports.removeCarPlayScene = removeCarPlayScene;
+module.exports.configureCarDeclarations = configureCarDeclarations;
+module.exports.resolveOptions = resolveOptions;

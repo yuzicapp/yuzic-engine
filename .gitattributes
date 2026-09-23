@@ -1,0 +1,24 @@
+# LF in the repository and in every checkout, whatever a contributor's
+# core.autocrlf says, so a file saved on Windows does not arrive as a
+# whole-file diff.
+* text=auto eol=lf
+
+# Binary, so no line-ending conversion or textual diff is ever attempted.
+*.p12 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.a binary
+*.so binary
+*.dylib binary
+*.jar binary
+*.aar binary
+*.wav binary
+*.flac binary
+*.mp3 binary
+*.m4a binary
+*.ogg binary
+*.opus binary

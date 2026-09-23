@@ -331,8 +331,13 @@ public final class HTTPTrackReaderFactory: TrackReaderFactory {
     let estimate = seconds > 0
       ? Int64(seconds * Self.assumedBitrate / 8)
       : Int64(64 * 1024 * 1024)
+    // A non-zero offset only arrives from `reconnectStream`, which does not
+    // ask for one when the track has no parameter to carry it.
+    let resumed = track.seekReconnectParam.map {
+      streamURL(base: url, timeOffsetSeconds: timeOffsetSeconds, param: $0)
+    } ?? url
     let producer = HTTPStreamProducer(
-      url: streamURL(base: url, timeOffsetSeconds: timeOffsetSeconds),
+      url: resumed,
       headers: track.headers,
       clientCertificate: transport.certificate
     )
@@ -356,6 +361,9 @@ public final class HTTPTrackReaderFactory: TrackReaderFactory {
     let ext = url.pathExtension.lowercased()
     if ["m4a", "mp4", "m4b", "aac"].contains(ext) { return true }
     // Subsonic-style URLs carry the format in the query rather than the path.
+    // Only a hint: a wrong answer costs one tail prefetch, or leaves an MP4
+    // opening a little slower, and never changes what plays. So it stays a
+    // guess from the URL rather than something every host has to declare.
     let query = url.query?.lowercased() ?? ""
     return query.contains("format=m4a") || query.contains("format=aac")
   }

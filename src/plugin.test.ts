@@ -123,4 +123,118 @@ describe('config plugin', () => {
       expect(names).toContain('android.permission.CAMERA');
     });
   });
+  describe('options', () => {
+    it('turns every car surface on when the host passes none', () => {
+      // yuzic lists the plugin with no options, and must keep what it had.
+      expect(plugin.resolveOptions(undefined)).toEqual({
+        carplay: true,
+        androidAuto: true,
+        automotive: true,
+      });
+    });
+
+    it('turns off only what the host names', () => {
+      expect(plugin.resolveOptions({ automotive: false })).toEqual({
+        carplay: true,
+        androidAuto: true,
+        automotive: false,
+      });
+    });
+  });
+
+  describe('CarPlay opt-out', () => {
+    it('takes its own scene back out and keeps the host scenes', () => {
+      const plist = plugin.addCarPlayScene({
+        UIApplicationSceneManifest: {
+          UISceneConfigurations: {
+            CPTemplateApplicationSceneSessionRoleApplication: [
+              { UISceneConfigurationName: 'HostCarPlay' },
+            ],
+          },
+        },
+      });
+      plugin.removeCarPlayScene(plist);
+      const scenes =
+        plist.UIApplicationSceneManifest.UISceneConfigurations
+          .CPTemplateApplicationSceneSessionRoleApplication;
+      expect(scenes.map((s: any) => s.UISceneConfigurationName)).toEqual(['HostCarPlay']);
+    });
+
+    it('drops the role when its scene was the only one', () => {
+      const plist = plugin.removeCarPlayScene(plugin.addCarPlayScene({}));
+      expect(
+        plist.UIApplicationSceneManifest.UISceneConfigurations
+          .CPTemplateApplicationSceneSessionRoleApplication
+      ).toBeUndefined();
+    });
+
+    it('leaves a plist with no scenes alone', () => {
+      expect(plugin.removeCarPlayScene({})).toEqual({});
+    });
+  });
+
+  describe('Android car opt-out', () => {
+    const on = { carplay: true, androidAuto: true, automotive: true };
+    const setUp = () => {
+      const manifest = { manifest: { $: {} } } as any;
+      const app = {} as any;
+      plugin.addPlaybackService(manifest, app);
+      return { manifest, app };
+    };
+    const marker = (entries: any[] | undefined, name: string) =>
+      (entries ?? []).find((e: any) => e.$['android:name'] === name)?.$['tools:node'];
+
+    it('adds nothing when every car is on', () => {
+      // The declarations live in the library manifest; with the defaults the
+      // host's manifest must come out exactly as it did before options existed.
+      const { manifest, app } = setUp();
+      const before = JSON.stringify({ manifest, app });
+      plugin.configureCarDeclarations(manifest, app, on);
+      expect(JSON.stringify({ manifest, app })).toBe(before);
+    });
+
+    it('removes the Android Auto key alone', () => {
+      const { manifest, app } = setUp();
+      plugin.configureCarDeclarations(manifest, app, { ...on, androidAuto: false });
+      expect(marker(app['meta-data'], 'com.google.android.gms.car.application')).toBe('remove');
+      expect(marker(app['meta-data'], 'com.android.automotive')).toBeUndefined();
+      expect(manifest.manifest.$['xmlns:tools']).toBe('http://schemas.android.com/tools');
+    });
+
+    it('removes both Automotive declarations together', () => {
+      // The key says it is a media app and the service opt-in puts it in the
+      // media app; one without the other is half a car.
+      const { manifest, app } = setUp();
+      plugin.configureCarDeclarations(manifest, app, { ...on, automotive: false });
+      expect(marker(app['meta-data'], 'com.android.automotive')).toBe('remove');
+      expect(marker(app.service[0]['meta-data'], 'androidx.car.app.launchable')).toBe('remove');
+      expect(marker(app['meta-data'], 'com.google.android.gms.car.application')).toBeUndefined();
+    });
+
+    it('turns a declaration the host wrote itself into a removal', () => {
+      const { manifest, app } = setUp();
+      app['meta-data'] = [
+        {
+          $: {
+            'android:name': 'com.google.android.gms.car.application',
+            'android:resource': '@xml/automotive_app_desc',
+          },
+        },
+      ];
+      plugin.configureCarDeclarations(manifest, app, { ...on, androidAuto: false });
+      expect(app['meta-data']).toHaveLength(1);
+      expect(marker(app['meta-data'], 'com.google.android.gms.car.application')).toBe('remove');
+    });
+
+    it('takes an earlier removal back out when the car is turned on again', () => {
+      const { manifest, app } = setUp();
+      const off = { carplay: true, androidAuto: false, automotive: false };
+      plugin.configureCarDeclarations(manifest, app, off);
+      plugin.configureCarDeclarations(manifest, app, off);
+      expect(app['meta-data']).toHaveLength(2);
+      plugin.configureCarDeclarations(manifest, app, on);
+      expect(app['meta-data']).toBeUndefined();
+      expect(app.service[0]['meta-data']).toBeUndefined();
+    });
+  });
 });

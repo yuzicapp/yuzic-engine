@@ -323,6 +323,12 @@ class PlaybackService : MediaLibraryService() {
 
   // MARK: - Browse tree
 
+  /**
+   * The host app's label, which titles the empty root served before a tree
+   * arrives. See [standInRoot] for why this and not a setup option.
+   */
+  private val appLabel: String by lazy { applicationInfo.loadLabel(packageManager).toString() }
+
   private inner class LibraryCallback : MediaLibrarySession.Callback {
 
     override fun onConnect(
@@ -380,7 +386,7 @@ class PlaybackService : MediaLibraryService() {
       // to be the same stand-in, which `browseNode` sees to, or the car's
       // subscription is refused. It has the real root's id so the car is
       // still subscribed when the tree arrives.
-      val root = browseRoot ?: standInRoot()
+      val root = browseRoot ?: standInRoot(appLabel)
       // The defaults for every list the car draws: rows, unless a node asks
       // for a grid (see `itemFor`). Sent with the root because that is where
       // a car reads them. Search support is advertised by Media3 on its own,
@@ -459,7 +465,7 @@ class PlaybackService : MediaLibraryService() {
       controller: MediaSession.ControllerInfo,
       mediaItems: MutableList<MediaItem>,
     ): ListenableFuture<MutableList<MediaItem>> {
-      val tracks = mediaItems.mapNotNull { browseNode(browseRoot, it.mediaId)?.playable }
+      val tracks = mediaItems.mapNotNull { browseNode(browseRoot, it.mediaId, appLabel)?.playable }
       if (tracks.isEmpty()) {
         return Futures.immediateFailedFuture(UnsupportedOperationException("nothing playable was chosen"))
       }
@@ -473,7 +479,7 @@ class PlaybackService : MediaLibraryService() {
       mediaId: String,
     ): ListenableFuture<LibraryResult<MediaItem>> {
       val root = browseRoot
-      val node = browseNode(root, mediaId)
+      val node = browseNode(root, mediaId, appLabel)
         ?: return Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
       val topLevel = root?.children.orEmpty().any { it.id == node.id }
       return Futures.immediateFuture(LibraryResult.ofItem(itemFor(node, browser, topLevel), null))
@@ -722,6 +728,17 @@ private class EnginePlayer(private val graph: AudioGraph) :
 
   override fun seekTo(positionMs: Long) {
     active.seekTo(positionMs)
+  }
+
+  // Skip forward and back, for the same reason as `seekTo`: forwarded, they
+  // reach the wrapped voice, which after an odd number of crossfades is the
+  // idle one, and the button moves a track that is not playing.
+  override fun seekForward() {
+    active.seekForward()
+  }
+
+  override fun seekBack() {
+    active.seekBack()
   }
 
   override fun stop() {

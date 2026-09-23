@@ -449,6 +449,13 @@ public final class PlaybackEngine {
     handlers.next = { [weak self] in try? self?.skipToNext() }
     handlers.previous = { [weak self] in try? self?.skipToPrevious() }
     handlers.seek = { [weak self] position in try? self?.seek(toSeconds: position) }
+    handlers.skipBy = { [weak self] delta in
+      guard let self else { return }
+      let now = self.progress
+      try? self.seek(toSeconds: NowPlayingInfo.skipTarget(
+        from: now.positionSec, by: delta, durationSec: now.durationSec
+      ))
+    }
     handlers.stop = { [weak self] in self?.stop() }
     nowPlaying.setCommands(remoteCommands, handlers: handlers)
   }
@@ -1247,6 +1254,10 @@ public final class PlaybackEngine {
     // with no beginning is meaningless, and asking for it would restart the
     // broadcast from wherever the server felt like.
     guard !track.continuous else { return false }
+    // A host whose server has no such parameter turned this off, and asking
+    // anyway would restart the track from the top while every position
+    // reported carried on from where it broke.
+    guard track.seekReconnectParam != nil else { return false }
     guard reconnectAttempts < Self.maxStreamReconnects else { return false }
 
     let resumeAt = progress.positionSec

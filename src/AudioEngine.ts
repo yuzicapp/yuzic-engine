@@ -106,7 +106,7 @@ export interface AudioEngine {
 
   // ── cache ────────────────────────────────────────────────────────────────
   //
-  // Implemented on iOS. Audio is kept on disk between tracks and between
+  // Both platforms, apart from `configureCache` (below). Audio is kept on disk between tracks and between
   // launches, keyed by `MediaId` rather than by URL — stream URLs carry tokens
   // that rotate, so a URL key would miss every session and fill the cache with
   // duplicates of one album.
@@ -152,6 +152,10 @@ export interface AudioEngine {
   setClientCertificate(pkcs12Base64: string | null, password: string | null): Promise<void>;
 
   /**
+   * **Experimental.** Its shape may change, or it may move out of this
+   * package, in a minor release. It is an HTTP client rather than audio, and
+   * is here only because the certificate it presents already is.
+   *
    * Perform an HTTP request presenting the client certificate set above.
    *
    * Here because JavaScript's `fetch` cannot present a client identity, and a
@@ -219,8 +223,13 @@ export interface ClientCertificateResponse {
   bodyBase64: string;
 }
 
+/**
+ * Only what both platforms honour. `cache` and `android` used to be declared
+ * here and were read by neither native module, so a host that set them got
+ * nothing and was not told. The cache is sized with `configureCache` (iOS),
+ * and the notification is Media3's own.
+ */
 export interface EngineSetupOptions {
-  cache?: CacheOptions;
   /**
    * How often to emit `progress`. The host usually wants ~1Hz for a progress
    * bar; scrubbing wants more. Emitting is cheap, re-rendering is not, so the
@@ -229,13 +238,13 @@ export interface EngineSetupOptions {
   progressIntervalMs?: number;
   /** Pause when headphones are unplugged, rather than playing out loud. */
   pauseOnBecomingNoisy?: boolean;
-  android?: {
-    notificationChannelId: string;
-    notificationChannelName: string;
-    smallIconResourceName?: string;
-  };
 }
 
+/**
+ * `skipForward` and `skipBackward` jump 15 seconds forward and 5 back, the
+ * same on both platforms: they are Media3's defaults, and iOS uses them too so
+ * the same button does the same thing everywhere.
+ */
 export type RemoteCommand =
   | 'playPause'
   | 'next'

@@ -1,7 +1,7 @@
 {
   "name": "yuzic-engine",
   "version": "1.2.0",
-  "description": "Audio playback engine for yuzic — React Native, built to own crossfade, DSP and caching outright",
+  "description": "An audio playback engine for React Native, built on an audio graph: gapless playback, crossfade, equalizer, replay gain, caching and car support",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -21,6 +21,10 @@
     "android",
     "lib",
     "src",
+    "!src/**/*.test.ts",
+    "!android/src/test",
+    "!android/build",
+    "!ios/build",
     "LICENSE",
     "NOTICE",
     "CHANGELOG.md",
@@ -40,10 +44,9 @@
     "equalizer"
   ],
   "peerDependencies": {
-    "@expo/config-plugins": "*",
-    "expo-modules-core": "*",
-    "react": "*",
-    "react-native": "*"
+    "@expo/config-plugins": ">=55.0.0",
+    "expo-modules-core": ">=55.0.0",
+    "react-native": ">=0.83.0"
   },
   "devDependencies": {
     "@expo/config-plugins": "^57.0.9",

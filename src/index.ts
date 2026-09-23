@@ -16,6 +16,7 @@ export type {
   CacheOptions,
   CacheStats,
   CrossfadeOptions,
+  EngineErrorCode,
   EngineEvent,
   EqBand,
   MediaId,
