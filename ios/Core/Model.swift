@@ -36,6 +36,14 @@ public struct Track: Equatable {
   public let replayGainPeak: Double?
   /// A stream with no end. Live radio.
   public let continuous: Bool
+  /// The query parameter that restarts a sequential stream partway in, or
+  /// nil when the server has none and a broken stream should fail instead.
+  /// Defaults to Subsonic's `timeOffset`. See `Track.seekReconnect` in
+  /// src/types.ts.
+  public let seekReconnectParam: String?
+
+  /// What `seekReconnectParam` is when the host does not say.
+  public static let defaultSeekReconnectParam = "timeOffset"
 
   public init(
     id: String,
@@ -50,7 +58,8 @@ public struct Track: Equatable {
     followsPrevious: Bool = false,
     replayGainDb: Double? = nil,
     replayGainPeak: Double? = nil,
-    continuous: Bool = false
+    continuous: Bool = false,
+    seekReconnectParam: String? = Track.defaultSeekReconnectParam
   ) {
     self.id = id
     self.uri = uri
@@ -65,6 +74,7 @@ public struct Track: Equatable {
     self.replayGainDb = replayGainDb
     self.replayGainPeak = replayGainPeak
     self.continuous = continuous
+    self.seekReconnectParam = seekReconnectParam
   }
 }
 

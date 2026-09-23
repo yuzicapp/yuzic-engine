@@ -69,6 +69,24 @@ export interface Track {
    * preparation and end-of-track prediction — all three assume a finish line.
    */
   continuous?: boolean;
+  /**
+   * How to pick a stream back up after it breaks, when the server offered no
+   * byte ranges and so the lost bytes cannot simply be asked for again. The
+   * engine requests the track anew with this query parameter set to the
+   * second reached, replacing any value already in the URL.
+   *
+   * Absent means `{ queryParam: 'timeOffset' }`, which is Subsonic's (and so
+   * Navidrome's) spelling. That default is kept for compatibility, and it is
+   * the wrong one for any other server: a parameter the server ignores
+   * restarts the track from the top while the reported position carries on.
+   * Pass `{ queryParam: null }` to turn reconnection off, so a broken stream
+   * is reported as an `error` event instead.
+   *
+   * iOS only. Android reopens the same URL at the position reached and lets
+   * Media3 find its way there, so it sends no parameter and reads nothing
+   * here.
+   */
+  seekReconnect?: { queryParam: string | null };
 }
 
 export type RepeatMode = 'off' | 'one' | 'all';

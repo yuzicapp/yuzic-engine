@@ -94,8 +94,10 @@ final class StreamReconnectTests: XCTestCase {
   /// Puts the playhead somewhere there is something to come back *to*. A
   /// stream that fails in its first second has nothing to resume and is
   /// deliberately not reconnected.
-  private func playAndSeek(_ engine: PlaybackEngine, toSeconds seconds: Double) throws {
-    engine.setQueue([song("a")], startIndex: 0)
+  private func playAndSeek(
+    _ engine: PlaybackEngine, toSeconds seconds: Double, track: Track? = nil
+  ) throws {
+    engine.setQueue([track ?? song("a")], startIndex: 0)
     try engine.play()
     // A seek needs a reader, and the track's opens off the main thread.
     settle { engine.activePlaybackIsWiredForTesting }
@@ -172,6 +174,31 @@ final class StreamReconnectTests: XCTestCase {
 
     XCTAssertEqual(factory.offsetsAsked.count, 1, "nothing should have been reopened")
     XCTAssertEqual(failures.count, 1, "a ranged failure is still reported as a failure")
+  }
+
+  /**
+   A host whose server has no offset parameter is not reconnected.
+
+   Asking anyway would send a parameter the server ignores, and the stream
+   would restart from the top while the position carried on from eight
+   seconds. Failing is the honest answer there.
+   */
+  func testATrackWithNoReconnectParameterIsNotReconnected() throws {
+    let (engine, factory) = try makeEngine(sequential: true)
+    let track = Track(
+      id: "a", uri: "https://example.test/stream?id=a", title: "a",
+      durationSec: 30, seekReconnectParam: nil
+    )
+    try playAndSeek(engine, toSeconds: 8, track: track)
+
+    var failures: [String] = []
+    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+
+    engine.failActiveTrackForTesting(ByteSourceError.fetchFailed("stream went away"))
+    settle { !failures.isEmpty }
+
+    XCTAssertEqual(factory.offsetsAsked.count, 1, "nothing should have been reopened")
+    XCTAssertEqual(failures.count, 1, "the failure is reported instead")
   }
 
   /**
@@ -254,6 +281,17 @@ final class StreamReconnectTests: XCTestCase {
       ["timeOffset=45"],
       "a second reconnection must replace the first offset, not stack another on it"
     )
+  }
+
+  func testTheParameterIsTheTracksToName() {
+    let base = URL(string: "https://example.test/audio/7?start=10")!
+    let resumed = streamURL(base: base, timeOffsetSeconds: 45, param: "start")
+    XCTAssertEqual(resumed.query, "start=45")
+  }
+
+  func testSubsonicsParameterIsTheDefault() {
+    let track = Track(id: "a", uri: "https://example.test/a", title: "a")
+    XCTAssertEqual(track.seekReconnectParam, "timeOffset")
   }
 
   func testAZeroOffsetLeavesTheURLAlone() {

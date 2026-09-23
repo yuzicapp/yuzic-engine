@@ -52,7 +52,13 @@ KNOWN_GAPS = {
 #
 # A field-level gap rather than a whole method, because the method itself works
 # on both platforms — it is one argument of one record that has nowhere to go.
-KNOWN_FIELD_GAPS: dict[str, str] = {}
+KNOWN_FIELD_GAPS: dict[str, str] = {
+    # iOS restarts a stream that broke with no byte ranges by asking the
+    # server for it again from a time offset in the query. Android reopens
+    # the same URL at the position reached and lets Media3 get there, so
+    # there is nothing on that side for the parameter to name.
+    "seekReconnect": "android",
+}
 
 # Events one platform declares and deliberately never sends. Same rule as
 # KNOWN_GAPS: listing one is a claim that the difference is understood, not a

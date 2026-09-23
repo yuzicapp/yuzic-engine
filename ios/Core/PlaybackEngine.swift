@@ -1254,6 +1254,10 @@ public final class PlaybackEngine {
     // with no beginning is meaningless, and asking for it would restart the
     // broadcast from wherever the server felt like.
     guard !track.continuous else { return false }
+    // A host whose server has no such parameter turned this off, and asking
+    // anyway would restart the track from the top while every position
+    // reported carried on from where it broke.
+    guard track.seekReconnectParam != nil else { return false }
     guard reconnectAttempts < Self.maxStreamReconnects else { return false }
 
     let resumeAt = progress.positionSec
