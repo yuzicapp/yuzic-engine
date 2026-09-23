@@ -128,6 +128,18 @@ screen never appears and nothing logs to say why.
 { "expo": { "plugins": ["yuzic-engine"] } }
 ```
 
+Every car surface is on by default. An app that does not want one turns it
+off by name:
+
+```json
+["yuzic-engine", { "carplay": false, "androidAuto": false, "automotive": false }]
+```
+
+`carplay: false` leaves out the CarPlay scene. The Android car declarations are
+in the library's own manifest (see below), so `androidAuto: false` and
+`automotive: false` write `tools:node="remove"` markers into your manifest
+instead. Both take effect on a prebuild.
+
 Two things the plugin cannot do for you:
 
 1. **The `com.apple.developer.carplay-audio` entitlement is granted by Apple per
