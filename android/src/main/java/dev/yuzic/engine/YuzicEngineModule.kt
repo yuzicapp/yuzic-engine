@@ -60,8 +60,8 @@ class YuzicEngineModule : Module() {
     AsyncFunction("setup") { options: SetupOptions? ->
       configureAudioSession(options?.pauseOnBecomingNoisy ?: true)
       PlaybackService.eventSink = { name, body -> sendEvent(name, body) }
-      // Honoured, unlike on iOS, which declares the same field and then ticks
-      // at a hardcoded 250ms regardless. Worth not copying: the host asked.
+      // Honoured on both platforms, and floored at 100ms on both. iOS once
+      // ticked at a fixed 250ms whatever the host asked for.
       core.setProgressInterval((options?.progressIntervalMs ?: 1000).toLong())
       awaitService()
       core.startObservingOnMain()

@@ -283,18 +283,27 @@ export type BrowseIcon =
 
 export type BrowseAction = 'shuffle';
 
+/**
+ * The codes an `error` event carries, and every one either platform sends.
+ *
+ * `PLAYBACK_FAILED`: a track could not be opened or stopped short, and the
+ * message says which. `CROSSFADE_DISABLED`: crossfade was switched off because
+ * `setSampleRateMode('match-source')` cannot coexist with it.
+ */
+export type EngineErrorCode = 'PLAYBACK_FAILED' | 'CROSSFADE_DISABLED';
+
 export type EngineEvent =
   | { type: 'stateChange'; state: PlaybackState }
   /**
    * Fired at the crossover midpoint when crossfading, so it lines up with
-   * what the listener is actually hearing. `listenedSec` is the outgoing
-   * track's played time *including* its fade-out, which is what a scrobble
-   * threshold has to be measured against.
+   * what the listener is actually hearing. `previousListenedSec` is the
+   * outgoing track's played time *including* its fade-out, which is what a
+   * scrobble threshold has to be measured against.
    */
   | { type: 'trackChange'; index: number; id: MediaId | null; previousListenedSec?: number }
   | { type: 'progress'; progress: Progress }
   | { type: 'queueChange' }
-  | { type: 'error'; code: string; message: string; id?: MediaId }
+  | { type: 'error'; code: EngineErrorCode; message: string; id?: MediaId }
   /**
    * A remote command the engine could not handle alone — the car asked for
    * something from the browse tree, say. The host answers by driving the

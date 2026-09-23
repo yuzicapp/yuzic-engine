@@ -106,7 +106,7 @@ export interface AudioEngine {
 
   // ── cache ────────────────────────────────────────────────────────────────
   //
-  // Implemented on iOS. Audio is kept on disk between tracks and between
+  // Both platforms, apart from `configureCache` (below). Audio is kept on disk between tracks and between
   // launches, keyed by `MediaId` rather than by URL — stream URLs carry tokens
   // that rotate, so a URL key would miss every session and fill the cache with
   // duplicates of one album.

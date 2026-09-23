@@ -186,7 +186,7 @@ If your host starts React Native only from its phone scene, start it when a
 npm install
 npm run typecheck    # both tsconfigs — see below
 npm test             # the TypeScript side
-swift test           # the iOS core: 390 tests, no Xcode project, no app
+swift test           # the iOS core, about 400 tests, no Xcode project, no app
 ```
 
 `ios/Core` is a SwiftPM target as well as part of the pod, which is what lets
