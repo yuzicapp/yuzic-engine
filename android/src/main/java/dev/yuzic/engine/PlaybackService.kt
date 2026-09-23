@@ -730,6 +730,17 @@ private class EnginePlayer(private val graph: AudioGraph) :
     active.seekTo(positionMs)
   }
 
+  // Skip forward and back, for the same reason as `seekTo`: forwarded, they
+  // reach the wrapped voice, which after an odd number of crossfades is the
+  // idle one, and the button moves a track that is not playing.
+  override fun seekForward() {
+    active.seekForward()
+  }
+
+  override fun seekBack() {
+    active.seekBack()
+  }
+
   override fun stop() {
     graph.voiceA.player.stop()
     graph.voiceB.player.stop()

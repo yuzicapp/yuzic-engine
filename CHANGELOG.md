@@ -9,6 +9,29 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [Unreleased]
+
+### Removed
+
+- **Breaking for types only:** `EngineSetupOptions.cache`,
+  `EngineSetupOptions.android` and `CacheOptions.preloadCount`. Neither
+  platform ever read them, so removing them changes no behaviour, but a host
+  that sets one now gets a type error instead of silence. Size the cache with
+  `configureCache` (iOS) and drop the other two.
+
+### Added
+
+- iOS: the `skipForward` and `skipBackward` remote commands. `setCommands`
+  accepted both and dropped them by name. They jump 15 seconds forward and
+  5 back, which are Media3's defaults, so the buttons agree across platforms.
+- `Tools/parity.py` also compares string-union values: a value the
+  TypeScript API offers that a platform never reads now fails the check.
+
+### Fixed
+
+- Android: skip forward and back moved the idle voice after an odd number of
+  crossfades, instead of the one playing.
+
 ## [1.2.0]
 
 ### Added

@@ -449,6 +449,13 @@ public final class PlaybackEngine {
     handlers.next = { [weak self] in try? self?.skipToNext() }
     handlers.previous = { [weak self] in try? self?.skipToPrevious() }
     handlers.seek = { [weak self] position in try? self?.seek(toSeconds: position) }
+    handlers.skipBy = { [weak self] delta in
+      guard let self else { return }
+      let now = self.progress
+      try? self.seek(toSeconds: NowPlayingInfo.skipTarget(
+        from: now.positionSec, by: delta, durationSec: now.durationSec
+      ))
+    }
     handlers.stop = { [weak self] in self?.stop() }
     nowPlaying.setCommands(remoteCommands, handlers: handlers)
   }

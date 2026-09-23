@@ -192,14 +192,13 @@ export interface ReplayGainOptions {
  */
 export type SampleRateMode = 'fixed' | 'match-source';
 
+/**
+ * There is no preload count. One was declared here and neither platform read
+ * it. The engine prepares the next track in the queue on its own, which is
+ * the one a crossfade or a gapless join needs.
+ */
 export interface CacheOptions {
   maxBytes: number;
-  /**
-   * How many upcoming tracks to fetch ahead. Preloading is what makes gapless
-   * and crossfade possible at all — you cannot overlap into a track you have
-   * not started fetching.
-   */
-  preloadCount: number;
 }
 
 export interface CacheStats {

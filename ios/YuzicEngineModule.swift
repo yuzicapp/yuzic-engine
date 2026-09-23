@@ -576,9 +576,6 @@ struct ClientCertificateRequestRecord: Record {
 
 struct CacheOptionsRecord: Record {
   @Field var maxBytes: Double = Double(DiskCache.defaultMaxBytes)
-  /// Carried because `CacheOptions` declares it, and honoured by the queue's
-  /// preload rather than by the cache — the cache stores what it is given.
-  @Field var preloadCount: Int = 2
 }
 
 struct ReplayGainRecord: Record {

@@ -67,6 +67,22 @@ KNOWN_EVENT_GAPS = {
     "onRemoteCommand": "ios",
 }
 
+# String-union values one platform deliberately does not recognise, keyed by
+# (union, value). Same rule again: a claim that the difference is understood.
+KNOWN_VALUE_GAPS: dict[tuple[str, str], str] = {
+    # CarPlay draws every list as rows with artwork, so iOS reads no layout at
+    # all. See `BrowseNode.layout` and BrowseTree.swift.
+    ("BrowseLayout", "list"): "ios",
+    ("BrowseLayout", "grid"): "ios",
+    # Android tests for `gapless-aware` and treats every other mode as
+    # `always`, so the word itself never appears. Handled, not ignored.
+    ("mode", "always"): "android",
+}
+
+# Unions the host never sends. `PlaybackState` travels the other way and is
+# compared as the state vocabulary below.
+OUTPUT_ONLY_UNIONS = {"PlaybackState"}
+
 # Swift and Kotlin spell the same wire types differently. Normalise both onto a
 # single vocabulary so that `[TrackRecord]` and `List<TrackRecord>` compare
 # equal — they are the same thing to the bridge, and a diff that reported them
@@ -283,6 +299,107 @@ def parse_states(text: str) -> set[str]:
     return found
 
 
+# ── String-union values ──────────────────────────────────────────────────────
+#
+# A value the TypeScript union offers and a platform never reads is the same
+# failure as a missing method, one level down: the host sends it, the bridge
+# accepts it, and the native side drops it. iOS once took `skipForward` and
+# `skipBackward` from `setCommands` and discarded them by name while Android
+# honoured both, and nothing here could see it because the method signature
+# was `[String]` on both sides.
+#
+# Checked by vocabulary: each value has to appear on each platform as a string
+# literal, or as a case of a Swift `String` enum, whose raw value is its name
+# unless it says otherwise. Comments are stripped first so that a value only
+# mentioned in prose does not count. This cannot prove the value is handled
+# well, only that the platform has a word for it.
+
+TS_SOURCES = [ROOT / "src" / "types.ts", ROOT / "src" / "AudioEngine.ts"]
+IOS_SOURCES = ROOT / "ios"
+ANDROID_SOURCES = ROOT / "android" / "src" / "main"
+
+NAMED_UNION = re.compile(r"export type (\w+)\s*=\s*((?:\s*\|?\s*'[^']*')+)\s*;")
+INLINE_UNION = re.compile(r"(\w+)\??\s*:\s*('[^']*'(?:\s*\|\s*'[^']*')+)")
+STRING_ENUM = re.compile(r"enum\s+\w+\s*:\s*String[^{]*\{")
+
+
+def parse_unions(text: str) -> dict[str, list[str]]:
+    """Every string-literal union in the TypeScript API.
+
+    Named unions by their type name, and inline ones (`mode: 'a' | 'b'`) by
+    the field that declares them.
+    """
+    unions: dict[str, list[str]] = {}
+    for m in NAMED_UNION.finditer(text):
+        unions[m.group(1)] = re.findall(r"'([^']*)'", m.group(2))
+    for m in INLINE_UNION.finditer(text):
+        unions.setdefault(m.group(1), re.findall(r"'([^']*)'", m.group(2)))
+    return {n: v for n, v in unions.items() if n not in OUTPUT_ONLY_UNIONS}
+
+
+def strip_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"(?m)(^|\s)//.*$", r"\1", text)
+
+
+def vocabulary(text: str) -> tuple[str, set[str]]:
+    """The code with comments removed, and the raw values of its String enums."""
+    code = strip_comments(text)
+    cases: set[str] = set()
+    for m in STRING_ENUM.finditer(code):
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            depth += {"{": 1, "}": -1}.get(code[i], 0)
+            i += 1
+        for line in re.findall(r"\bcase\s+([^\n]+)", code[m.end() : i]):
+            for part in line.split(","):
+                named = re.match(r"\s*`?(\w+)`?\s*(?:=\s*\"([^\"]*)\")?", part)
+                if named:
+                    cases.add(named.group(2) or named.group(1))
+    return code, cases
+
+
+def platform_vocabulary(root: Path, suffix: str) -> tuple[str, set[str]]:
+    texts = [
+        p.read_text(encoding="utf-8")
+        for p in sorted(root.rglob(f"*{suffix}"))
+        if "Vendor" not in p.parts
+    ]
+    return vocabulary("\n".join(texts))
+
+
+def android_icon_names() -> set[str]:
+    """Android spells a browse icon as a drawable, `yuzic_car_<icon>`, and
+    builds the resource name from the value rather than quoting it."""
+    drawables = ANDROID_SOURCES / "res" / "drawable"
+    return {p.stem[len("yuzic_car_"):] for p in drawables.glob("yuzic_car_*.xml")}
+
+
+def union_problems() -> tuple[list[str], list[tuple[str, str]]]:
+    """Values a platform has no word for, and KNOWN_VALUE_GAPS entries that no
+    longer describe anything."""
+    unions = parse_unions("\n".join(p.read_text(encoding="utf-8") for p in TS_SOURCES))
+    ios_code, ios_cases = platform_vocabulary(IOS_SOURCES, ".swift")
+    android_code, android_cases = platform_vocabulary(ANDROID_SOURCES, ".kt")
+    android_cases |= android_icon_names()
+
+    problems: list[str] = []
+    missing: set[tuple[str, str]] = set()
+    for union, values in sorted(unions.items()):
+        for value in values:
+            for side, code, cases in (
+                ("ios", ios_code, ios_cases),
+                ("android", android_code, android_cases),
+            ):
+                if f'"{value}"' in code or value in cases:
+                    continue
+                missing.add((union, value))
+                if KNOWN_VALUE_GAPS.get((union, value)) != side:
+                    problems.append(f"{union} '{value}' is never read on {side}")
+    stale = sorted(set(KNOWN_VALUE_GAPS) - missing)
+    return problems, stale
+
+
 def main() -> int:
     ios_text, android_text = IOS.read_text(), ANDROID.read_text()
     ios_records = parse_records(ios_text)
@@ -348,6 +465,7 @@ def main() -> int:
     # A gap that has been closed should stop being listed as known, or the list
     # slowly becomes a record of what used to be true.
     stale = sorted(set(KNOWN_GAPS) - set(known))
+    value_problems, stale_values = union_problems()
 
     print(f"iOS: {len(ios)} methods   Android: {len(android)} methods\n")
 
@@ -365,6 +483,17 @@ def main() -> int:
         print("KNOWN_GAPS lists differences that no longer exist — remove them:")
         for n in stale:
             print(f"  {n}")
+        print()
+
+    if stale_values:
+        print("KNOWN_VALUE_GAPS lists values both platforms now read. Remove them:")
+        for union, value in stale_values:
+            print(f"  {union} '{value}'")
+        print()
+    if value_problems:
+        print("String-union values the TypeScript API offers and a platform drops:")
+        for problem in value_problems:
+            print(f"  {problem}")
         print()
 
     if ios_only:
@@ -391,8 +520,14 @@ def main() -> int:
             print(f"  {problem}")
         print()
 
-    if not (ios_only or android_only or mismatched or stale or event_problems):
-        print("Signatures and event vocabulary agree, apart from the declared gaps above.")
+    if not (
+        ios_only or android_only or mismatched or stale or event_problems
+        or value_problems or stale_values
+    ):
+        print(
+            "Signatures, event vocabulary and union values agree, apart from the "
+            "declared gaps above."
+        )
         print(
             "Note: this compares names, types and vocabulary. It cannot compare "
             "*when* an event is sent, so it says nothing about the two platforms "

@@ -202,4 +202,27 @@ final class NowPlayingTests: XCTestCase {
     XCTAssertEqual(NowPlayingInfo.playbackState(for: snapshot(isPlaying: false)), .paused)
     XCTAssertEqual(NowPlayingInfo.playbackState(for: snapshot(isPlaying: true)), .playing)
   }
+
+  // MARK: skip forward and back
+
+  func testTheSkipCommandsAreRecognisedByName() {
+    // `setCommands` drops a name it does not recognise, which is how these two
+    // were silently ignored on iOS while Android honoured them.
+    XCTAssertEqual(RemoteCommand(rawValue: "skipForward"), .skipForward)
+    XCTAssertEqual(RemoteCommand(rawValue: "skipBackward"), .skipBackward)
+  }
+
+  func testASkipMovesByTheInterval() {
+    XCTAssertEqual(NowPlayingInfo.skipTarget(from: 30, by: 15, durationSec: 200), 45)
+    XCTAssertEqual(NowPlayingInfo.skipTarget(from: 30, by: -5, durationSec: 200), 25)
+  }
+
+  func testASkipIsClampedToTheTrack() {
+    XCTAssertEqual(NowPlayingInfo.skipTarget(from: 2, by: -5, durationSec: 200), 0)
+    XCTAssertEqual(NowPlayingInfo.skipTarget(from: 195, by: 15, durationSec: 200), 200)
+  }
+
+  func testAnUnknownDurationOnlyClampsAtZero() {
+    XCTAssertEqual(NowPlayingInfo.skipTarget(from: 195, by: 15, durationSec: 0), 210)
+  }
 }
