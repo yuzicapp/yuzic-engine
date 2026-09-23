@@ -152,6 +152,10 @@ export interface AudioEngine {
   setClientCertificate(pkcs12Base64: string | null, password: string | null): Promise<void>;
 
   /**
+   * **Experimental.** Its shape may change, or it may move out of this
+   * package, in a minor release. It is an HTTP client rather than audio, and
+   * is here only because the certificate it presents already is.
+   *
    * Perform an HTTP request presenting the client certificate set above.
    *
    * Here because JavaScript's `fetch` cannot present a client identity, and a

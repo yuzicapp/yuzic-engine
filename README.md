@@ -59,6 +59,8 @@ album/track/auto modes and clipping protection.
 **Sources.** Local files, and HTTP streaming with auth in query parameters or
 headers. Mutual TLS can import a PKCS#12 identity in memory and presents the
 same identity for ordinary server API requests and Media3/Core Audio streaming.
+The API half, `clientCertificateRequest`, is experimental: it is an HTTP
+client rather than audio, and may change or move out in a minor release.
 Remote audio is fetched through a byte source with an on-device LRU
 cache keyed by media id — not by URL, because Subsonic and Jellyfin hand out
 URLs carrying a token that rotates, and keying on those re-downloads the same
