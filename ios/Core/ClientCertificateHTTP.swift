@@ -84,6 +84,19 @@ public final class ClientCertificateHTTP {
     return session != nil
   }
 
+  /// The session to send the next request through, read under the lock.
+  ///
+  /// Synchronous on purpose: `NSLock`'s `lock()` and `unlock()` are
+  /// unavailable from an asynchronous context — a hard error in the Swift 6
+  /// language mode — because holding one across a suspension point blocks a
+  /// cooperative thread. Taking the lock here, in a function that cannot
+  /// suspend, keeps the same protection without that risk.
+  private func currentSession() -> URLSession {
+    lock.lock()
+    defer { lock.unlock() }
+    return session ?? .shared
+  }
+
   /**
    Perform a request, presenting the certificate if one is set.
 
@@ -102,9 +115,7 @@ public final class ClientCertificateHTTP {
   ) async throws -> Result {
     guard let parsed = URL(string: url) else { throw RequestError.invalidURL(url) }
 
-    lock.lock()
-    let active = session ?? .shared
-    lock.unlock()
+    let active = currentSession()
 
     var request = URLRequest(url: parsed)
     request.httpMethod = method

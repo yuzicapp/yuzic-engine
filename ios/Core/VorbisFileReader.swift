@@ -94,7 +94,7 @@ public final class VorbisFileReader: TrackReader {
   public func open() throws {
     guard !opened else { return }
 
-    var callbacks = ov_callbacks(
+    let callbacks = ov_callbacks(
       read_func: { buffer, size, count, handle in
         let reader = Unmanaged<VorbisFileReader>.fromOpaque(handle!).takeUnretainedValue()
         return reader.readBytes(into: buffer, size: size, count: count)
