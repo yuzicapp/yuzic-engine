@@ -21,7 +21,7 @@ import AVFoundation
  raised. That is exactly why it should exist and say so: if it is ever seen,
  the ordering guarantee has broken and the alternative is silence.
  */
-internal final class EngineNotSetUpException: Exception {
+internal final class EngineNotSetUpException: Exception, @unchecked Sendable {
   override var reason: String {
     "the engine is not set up — call setup() and wait for it before any command"
   }

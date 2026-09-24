@@ -1959,7 +1959,7 @@ public final class PlaybackEngine {
   }
 
   private func tick() {
-    guard let playback = activePlayback, let reader = activeReader, reader.sampleRate > 0 else { return }
+    guard activePlayback != nil, let reader = activeReader, reader.sampleRate > 0 else { return }
     // Read once, through the same accessor `getProgress` uses, so the event
     // and the answer to a direct question cannot drift apart.
     let (position, duration, buffered) = progress
