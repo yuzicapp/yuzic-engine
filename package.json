@@ -1,6 +1,6 @@
 {
   "name": "yuzic-engine",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Audio playback engine for yuzic — React Native, built to own crossfade, DSP and caching outright",
   "license": "Apache-2.0",
   "repository": {
