@@ -741,6 +741,36 @@ final class PlaybackEngineTests: XCTestCase {
       wasPausedByUs: false, systemSaysResume: false))
   }
 
+  /**
+   Losing the output pauses; every other route change plays on.
+
+   `pauseOnBecomingNoisy` is the host's, and it was accepted and dropped on this
+   platform while Android applied it — headphones unplugged paused whatever the
+   host had asked for. The default is unchanged, so the answer for a host that
+   says nothing is the same as before.
+   */
+  func testPausesWhenTheOutputGoesAway() throws {
+    XCTAssertTrue(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true))
+    // The default an engine carries before a host says anything.
+    let (engine, _, _) = try makeEngine()
+    XCTAssertTrue(engine.pauseOnBecomingNoisy)
+  }
+
+  /// CarPlay connecting, a dock, AirPods taking over: the route changed and the
+  /// output is still there, which is not a reason to stop the music.
+  func testPlaysOnThroughARouteChangeThatKeepsTheOutput() {
+    XCTAssertFalse(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: false, pauseOnBecomingNoisy: true))
+  }
+
+  func testDoesNotPauseWhenTheHostAsksItNotTo() {
+    XCTAssertFalse(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: false))
+    XCTAssertFalse(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: false, pauseOnBecomingNoisy: false))
+  }
+
   func testPlayingOpensTheTrackAtTheStartIndex() throws {
     let (engine, factory, _) = try makeEngine()
     engine.setQueue([song("a"), song("b"), song("c")], startIndex: 1)

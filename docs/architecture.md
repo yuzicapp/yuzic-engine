@@ -1084,7 +1084,9 @@ make, found by reading both implementations against each other rather than by
 running anything.
 
 Fixed since it was written down: iOS ignored `progressIntervalMs` while
-Android honoured it (a host asking for 1Hz got 4Hz on iOS); iOS forwarded both
+Android honoured it (a host asking for 1Hz got 4Hz on iOS); iOS accepted
+`pauseOnBecomingNoisy` and dropped it, pausing on a lost output however the host
+had set it, while Android passed it to Media3; iOS forwarded both
 `stateChanged(.ended)` and `.ended` to the same wire event, so the queue
 finishing was announced twice; `play()` did nothing on a player Android had
 left in `STATE_IDLE`, the same defect iOS had with a stopped `TrackPlayback`;

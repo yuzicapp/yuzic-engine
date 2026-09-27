@@ -311,6 +311,17 @@ public final class PlaybackEngine {
   public var progressIntervalSec: Double = 1.0
   private var lastProgressEmit: Date?
 
+  /**
+   Whether losing the output pauses: headphones unplugged, Bluetooth gone.
+
+   The host's `pauseOnBecomingNoisy`, which this platform accepted and ignored
+   while Android honoured it — the same shape of gap as `progressIntervalSec`
+   above, and just as invisible to `Tools/parity.py`, which compares signatures
+   rather than what they do. The default is the same on both platforms, so a
+   host that passes nothing sees no change.
+   */
+  public var pauseOnBecomingNoisy: Bool = true
+
   private var observers: [NSObjectProtocol] = []
 
   /// Set while an interruption is in force, so `.ended` only resumes playback
@@ -559,14 +570,18 @@ public final class PlaybackEngine {
 
     // The output vanished. Unplugging headphones must pause rather than
     // continue out of the speaker, which is the one route change with an
-    // obvious right answer.
+    // obvious right answer — and the default. A host that says otherwise is
+    // taken at its word: read at delivery rather than captured, so a later
+    // `setup` changes it.
     observers.append(centre.addObserver(
       forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
     ) { [weak self] note in
-      guard let self,
-            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-            AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable
-      else { return }
+      guard let self else { return }
+      let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+      let lost = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) == .oldDeviceUnavailable
+      guard Self.shouldPauseForRouteChange(
+        outputWasLost: lost, pauseOnBecomingNoisy: self.pauseOnBecomingNoisy
+      ) else { return }
       self.pause()
     })
 
@@ -602,6 +617,22 @@ public final class PlaybackEngine {
     wasPausedByUs: Bool, systemSaysResume: Bool
   ) -> Bool {
     wasPausedByUs && systemSaysResume
+  }
+
+  /**
+   Whether a route change should pause.
+
+   Pure for the same reason as the rule above, and reachable from a Mac, which
+   the observer around it is not: `AVAudioSession`'s notifications cannot be
+   posted on cue from a test, so a rule left inline is a rule nothing checks.
+   Only the output going away counts — a dock, CarPlay connecting or AirPods
+   taking over are route changes a listener wants played through, not paused —
+   and the host may turn even that off.
+   */
+  static func shouldPauseForRouteChange(
+    outputWasLost: Bool, pauseOnBecomingNoisy: Bool
+  ) -> Bool {
+    outputWasLost && pauseOnBecomingNoisy
   }
 
   /**

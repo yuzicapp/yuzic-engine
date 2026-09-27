@@ -9,6 +9,15 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.2.3]
+
+### Fixed
+
+- iOS: `pauseOnBecomingNoisy` was accepted by `setup` and never applied, so a
+  lost output — headphones unplugged, Bluetooth gone — paused however the host
+  had set it. Android passed it to Media3 all along. The default is unchanged on
+  both, so a host that passes nothing sees no difference.
+
 ## [1.2.2]
 
 ### Fixed

@@ -104,7 +104,7 @@ public final class YuzicEngineModule: Module {
       // empty queue behind it. `reclaimAudioIfNeeded` activates on the first
       // thing that actually starts audio — the same path that recovers from an
       // interruption — so there is nowhere for that to be missed.
-      try self.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
+      try self.configureAudioSession()
 
       if self.engine == nil {
         // Built, not started, for the reason above: `AVAudioEngine.start()`
@@ -145,14 +145,19 @@ public final class YuzicEngineModule: Module {
       // The session is configured once, above — and a media services reset
       // clears it. The engine cannot know what category this host wants, so
       // it asks for the same call again rather than guessing one. Installed
-      // after the engine exists, and on every setup, so a setup that changes
-      // `pauseOnBecomingNoisy` re-arms the hook with the new value.
+      // after the engine exists, and on every setup.
       //
       // This one *does* activate: it is only ever called from
       // `reclaimAudioIfNeeded`, on the way to producing sound.
       self.engine?.reconfigureAudioSession = { [weak self] in
-        try self?.activateAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
+        try self?.activateAudioSession()
       }
+
+      // Outside the `engine == nil` guard, like the hook above: a second setup
+      // asking for the other answer gets it. The flag was accepted and dropped
+      // on this platform until now, so unplugging headphones paused however the
+      // host had set it.
+      self.engine?.pauseOnBecomingNoisy = pauseOnNoisy
 
       // What the car's "Up Next" reads, and how a row in it jumps. Read on
       // main when the driver opens it, which is where the engine lives.
@@ -515,14 +520,14 @@ public final class YuzicEngineModule: Module {
    the session is not, which is why activation is a separate call made only by
    something that is about to play.
    */
-  private func configureAudioSession(pauseOnBecomingNoisy: Bool) throws {
+  private func configureAudioSession() throws {
     let session = AVAudioSession.sharedInstance()
     try session.setCategory(.playback, mode: .default, policy: .longFormAudio)
   }
 
   /// The category, plus the session itself. Called on the path to sound only.
-  private func activateAudioSession(pauseOnBecomingNoisy: Bool) throws {
-    try configureAudioSession(pauseOnBecomingNoisy: pauseOnBecomingNoisy)
+  private func activateAudioSession() throws {
+    try configureAudioSession()
     try AVAudioSession.sharedInstance().setActive(true)
   }
 }
