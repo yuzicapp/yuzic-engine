@@ -9,6 +9,18 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.2.2]
+
+### Fixed
+
+- iOS: `setup` claimed the audio session and started the graph, so a host took
+  the phone's audio over the moment it launched — whatever else was playing
+  stopped, this app became the system's now-playing app with an empty queue
+  behind it, and the output route was held open idle. The category is declared
+  at setup, as before; the session is now activated by the first thing that
+  actually starts sound, through the same `reclaimAudioIfNeeded` path that
+  recovers from an interruption.
+
 ## [1.2.0]
 
 ### Added

@@ -182,6 +182,15 @@ graph (`reclaimAudioIfNeeded`), then rebuilds the playback at that position
 over the same reader. Same second, same stream, no second track-change event,
 and `.buffering` until a buffer is really scheduled.
 
+`setup` declares the category and builds the graph, and deliberately does
+neither of the two things that take the audio: it does not activate the session
+and does not start `AVAudioEngine`. Setting up is not playing. Activating on
+setup stopped whatever else the phone was playing the instant the host
+launched, left the app as the system's now-playing app with an empty queue
+behind it, and held the route open for a listener who had not asked for
+anything. Since every path to sound goes through `reclaimAudioIfNeeded`
+already, there is nowhere for the first activation to be missed.
+
 Two rules follow from what actually happens on a phone:
 
 - **No end may be assumed.** An app that holds a non-mixable session often

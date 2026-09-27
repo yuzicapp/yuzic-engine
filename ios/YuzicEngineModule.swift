@@ -98,11 +98,18 @@ public final class YuzicEngineModule: Module {
 
     AsyncFunction("setup") { (options: SetupOptions?) in
       let pauseOnNoisy = options?.pauseOnBecomingNoisy ?? true
+      // Category only. Setting up is not playing: activating the session here
+      // silences whatever else the phone was playing the moment the host
+      // launches, and leaves this app as the system's now-playing app with an
+      // empty queue behind it. `reclaimAudioIfNeeded` activates on the first
+      // thing that actually starts audio — the same path that recovers from an
+      // interruption — so there is nowhere for that to be missed.
       try self.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
 
       if self.engine == nil {
+        // Built, not started, for the reason above: `AVAudioEngine.start()`
+        // activates the session and then holds the route idle.
         let graph = AudioGraph()
-        try graph.start()
         // A cache that cannot be created is not a reason to refuse to play —
         // the engine worked without one until now, and falls back to that.
         let cache = try? DiskCache(directory: Self.defaultCacheDirectory())
@@ -140,8 +147,11 @@ public final class YuzicEngineModule: Module {
       // it asks for the same call again rather than guessing one. Installed
       // after the engine exists, and on every setup, so a setup that changes
       // `pauseOnBecomingNoisy` re-arms the hook with the new value.
+      //
+      // This one *does* activate: it is only ever called from
+      // `reclaimAudioIfNeeded`, on the way to producing sound.
       self.engine?.reconfigureAudioSession = { [weak self] in
-        try self?.configureAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
+        try self?.activateAudioSession(pauseOnBecomingNoisy: pauseOnNoisy)
       }
 
       // What the car's "Up Next" reads, and how a row in it jumps. Read on
@@ -500,11 +510,20 @@ public final class YuzicEngineModule: Module {
    `.playback` with `.longFormAudio`: the category that keeps playing when the
    screen locks and the routing policy that tells the system this is music
    rather than a game or a call.
+
+   Declaring the category is free — nothing else on the phone notices. Taking
+   the session is not, which is why activation is a separate call made only by
+   something that is about to play.
    */
   private func configureAudioSession(pauseOnBecomingNoisy: Bool) throws {
     let session = AVAudioSession.sharedInstance()
     try session.setCategory(.playback, mode: .default, policy: .longFormAudio)
-    try session.setActive(true)
+  }
+
+  /// The category, plus the session itself. Called on the path to sound only.
+  private func activateAudioSession(pauseOnBecomingNoisy: Bool) throws {
+    try configureAudioSession(pauseOnBecomingNoisy: pauseOnBecomingNoisy)
+    try AVAudioSession.sharedInstance().setActive(true)
   }
 }
 
