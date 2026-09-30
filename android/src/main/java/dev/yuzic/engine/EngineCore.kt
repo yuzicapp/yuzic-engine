@@ -610,7 +610,13 @@ internal class EngineCore {
     graph.ramp(outgoing, 0f, durationSec, AudioGraph.FadeCurve.EQUAL_POWER)
     incoming.player.play()
 
-    val listened = listenedSeconds()
+    // Counted across the fade, not at its start. A crossfade does not end the
+    // outgoing track, it lowers it, so it goes on being audible for the whole
+    // overlap — and this is what hosts judge "half the track, or four minutes"
+    // against. Measured on iOS before both platforms were corrected: a 20s
+    // track with an 8s crossfade reported 12.3s, and the listener had heard
+    // all 20. The mirror of `PlaybackEngine.outgoingListenedSec`.
+    val listened = listenedSeconds()?.plus(durationSec)
     val halfMillis = (durationSec / 2.0 * 1000).toLong()
 
     // Halfway through is when the incoming track becomes the one being heard,

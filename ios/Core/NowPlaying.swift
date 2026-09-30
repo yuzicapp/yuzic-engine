@@ -100,6 +100,29 @@ public struct NowPlayingInfo {
   public static func playbackState(for snapshot: Snapshot) -> MPNowPlayingPlaybackState {
     snapshot.isPlaying || snapshot.isBuffering ? .playing : .paused
   }
+
+  /// What a single headphone or steering-wheel press should mean right now.
+  public enum ToggleIntent: Equatable { case play, pause }
+
+  /**
+   Which way to toggle, decided from what this engine last published.
+
+   The obvious reading — ask `MPNowPlayingInfoCenter` what state it is in —
+   is the one that broke. `playbackState` is a property the app *sets* to tell
+   the system what is happening; reading it back is not a documented
+   round-trip, and when it answers with a stale `.playing` the toggle resolves
+   to "pause" against an already-paused engine. The press then does nothing,
+   forever: pausing from an AirPod stem worked and unpausing never did
+   (yuzic#298), because pause is the branch a wrong answer always picks.
+
+   Nothing has to be read back. This engine published the state itself, so it
+   is the authority on it, and `nil` — nothing published yet — means there is
+   nothing to pause.
+   */
+  public static func toggleIntent(for snapshot: Snapshot?) -> ToggleIntent {
+    guard let snapshot else { return .play }
+    return playbackState(for: snapshot) == .playing ? .pause : .play
+  }
 }
 
 /// The commands to advertise. A control that is offered but does nothing is
@@ -279,9 +302,14 @@ public final class NowPlayingCenter {
     }
     commands.togglePlayPauseCommand.addTarget { [weak self] _ in
       // The car and the headphone button send this one rather than a specific
-      // play or pause, so the engine's own state decides which it means.
-      if self?.center.playbackState == .playing { self?.handlers.pause?() }
-      else { self?.handlers.play?() }
+      // play or pause, so the engine's own state decides which it means — what
+      // it last published, not what the system says when asked back. See
+      // `NowPlayingInfo.toggleIntent`.
+      guard let self else { return .commandFailed }
+      switch NowPlayingInfo.toggleIntent(for: lastPublished) {
+      case .pause: handlers.pause?()
+      case .play: handlers.play?()
+      }
       return .success
     }
     commands.nextTrackCommand.addTarget { [weak self] _ in

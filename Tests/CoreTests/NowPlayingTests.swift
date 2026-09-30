@@ -202,4 +202,34 @@ final class NowPlayingTests: XCTestCase {
     XCTAssertEqual(NowPlayingInfo.playbackState(for: snapshot(isPlaying: false)), .paused)
     XCTAssertEqual(NowPlayingInfo.playbackState(for: snapshot(isPlaying: true)), .playing)
   }
+
+  // MARK: - Which way a single press goes
+
+  /**
+   yuzic#298: an AirPod stem paused and would never unpause.
+
+   The toggle used to ask `MPNowPlayingInfoCenter` what state it was in.
+   That is a property the app sets, not one it can rely on reading back, and a
+   stale `.playing` sends every press down the pause branch — which is
+   invisible while playing and total once paused.
+   */
+  func testAPressWhilePausedMeansPlay() {
+    XCTAssertEqual(NowPlayingInfo.toggleIntent(for: snapshot(isPlaying: false)), .play)
+  }
+
+  func testAPressWhilePlayingMeansPause() {
+    XCTAssertEqual(NowPlayingInfo.toggleIntent(for: snapshot(isPlaying: true)), .pause)
+  }
+
+  func testAPressWhileOpeningMeansPause() {
+    // Buffering is drawn as playing, so the button under the listener's thumb
+    // says pause; it has to do what it says.
+    XCTAssertEqual(
+      NowPlayingInfo.toggleIntent(for: snapshot(isPlaying: false, isBuffering: true)), .pause)
+  }
+
+  func testAPressWithNothingPublishedMeansPlay() {
+    // Nothing has been published, so there is nothing to pause.
+    XCTAssertEqual(NowPlayingInfo.toggleIntent(for: nil), .play)
+  }
 }

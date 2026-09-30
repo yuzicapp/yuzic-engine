@@ -1909,6 +1909,32 @@ public final class PlaybackEngine {
   }
 
   /**
+   How much of the outgoing track was listened to, counted across the fade.
+
+   Pure and separate for the same reason as the two beside it — the transition
+   itself is scheduled work this harness cannot drive, and this is the part
+   that was wrong.
+
+   A crossfade does not end a track, it lowers it. The outgoing track stays
+   audible for the whole fade, so what it was listened to is what it had
+   reached when the fade began *plus* the fade. Measured on a simulator before
+   this existed, a 20-second track with an eight-second crossfade reported
+   12.3 seconds — the fade's start, read once and emitted unchanged at the
+   crossover midpoint, with the seconds the listener actually heard out
+   discarded. Hosts measure "half the track, or four minutes" against this, so
+   understating it drops scrobbles at the boundary and does it silently.
+
+   `nil` in means nothing was ever playing, and stays `nil`: absent is not the
+   same as zero, and a host that reads a zero would file a listen of no length
+   rather than no listen.
+   */
+  public static func outgoingListenedSec(atFadeStart listened: Double?, fadeSec: Double) -> Double? {
+    // A cut is a fade of zero and needs no correction — the track really did
+    // stop where the meter says.
+    listened.map { $0 + max(0, fadeSec) }
+  }
+
+  /**
    Whether it is time to start fading into the next track.
 
    Pure, and separated out because it is the one piece of this worth testing
@@ -2080,7 +2106,16 @@ public final class PlaybackEngine {
       try incoming.start(atFrame: 0)
 
       let outgoing = activePlayback
-      let listened = listenedSeconds()
+      // Read here because the meter is about to be reset for the incoming
+      // track, and counted across the fade because the outgoing one goes on
+      // being audible through all of it. See `outgoingListenedSec`.
+      //
+      // `trackChanged` fires at the crossover midpoint, half a fade before
+      // that total is true, so it is a claim about a fade already scheduled
+      // rather than a measurement — the same basis on which the incoming
+      // track is credited `duration / 2` below for the half it has already
+      // been heard through.
+      let listened = Self.outgoingListenedSec(atFadeStart: listenedSeconds(), fadeSec: duration)
 
       // Equal power on both halves: two tracks are audible together here,
       // and linear ramps would sum to a hole in the middle of the crossover.

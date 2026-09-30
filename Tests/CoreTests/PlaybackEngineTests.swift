@@ -40,6 +40,36 @@ final class PlaybackEngineTests: XCTestCase {
     XCTAssertTrue(PlaybackEngine.shouldBeginTransition(positionSec: 0, durationSec: 5, transitionSec: 10))
   }
 
+  // MARK: - What the outgoing track was listened to
+
+  /**
+   Measured on a simulator: a 20-second track with an eight-second crossfade
+   reported **12.3** seconds listened — the moment the fade began, read once
+   and emitted unchanged at the crossover midpoint, by which time the listener
+   had heard the track out.
+
+   A crossfade does not end a track, it lowers it, so the fade-out is time the
+   track was audible. Hosts judge "half the track, or four minutes" against
+   this number, and understating it loses scrobbles at the boundary silently.
+   */
+  func testTheFadeOutCountsTowardTheOutgoingTrack() {
+    let credited = PlaybackEngine.outgoingListenedSec(atFadeStart: 12.256, fadeSec: 8)
+    XCTAssertEqual(try XCTUnwrap(credited), 20.256, accuracy: 0.0001)
+  }
+
+  func testACutNeedsNoCorrection() {
+    // Every "cut, do not fade" rule reaches here as a zero — a segue, a
+    // continuous stream, a manual skip. The track really did stop where the
+    // meter says.
+    XCTAssertEqual(try XCTUnwrap(PlaybackEngine.outgoingListenedSec(atFadeStart: 30, fadeSec: 0)), 30)
+  }
+
+  func testNothingPlayingStaysNothing() {
+    // Absent is not zero: a host reading a zero would file a listen of no
+    // length rather than no listen at all.
+    XCTAssertNil(PlaybackEngine.outgoingListenedSec(atFadeStart: nil, fadeSec: 8))
+  }
+
   // MARK: - Which duration decides where a track ends
 
   /**
