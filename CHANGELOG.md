@@ -9,6 +9,25 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.2.4]
+
+### Fixed
+
+- iOS: a headphone or steering-wheel press could pause and then never unpause.
+  The toggle command asked `MPNowPlayingInfoCenter` which state it was in, and
+  that is a property an app sets rather than one it can rely on reading back; a
+  stale `.playing` sends every press down the pause branch, which is invisible
+  while playing and total once paused. The engine publishes that state itself,
+  so it now decides from its own last snapshot. Reported against AirPods Pro
+  (yuzic#298).
+- Both platforms: `previousListenedSec` understated every crossfaded track. It
+  was read when the fade began and emitted unchanged at the crossover midpoint,
+  so the seconds the outgoing track went on being audible were discarded —
+  measured at 12.3s reported for a 20-second track with an eight-second
+  crossfade. A crossfade lowers a track rather than ending it, so the fade-out
+  is listened time. Hosts judge scrobble thresholds against this figure, so the
+  cost was dropped scrobbles at track boundaries, with nothing to show for it.
+
 ## [1.2.3]
 
 ### Fixed
@@ -609,7 +628,8 @@ point; 1.0.0 marks the API being committed to rather than the code being new.
   live one mid-track. `Tools/parity.py` declares it; every other method agrees
   across the two platforms by signature and event vocabulary.
 
-[Unreleased]: https://github.com/yuzicapp/yuzic-engine/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/yuzicapp/yuzic-engine/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/yuzicapp/yuzic-engine/compare/v1.2.1...v1.2.4
 [1.1.0]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.17...v1.1.0
 [1.0.17]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.15...v1.0.16
