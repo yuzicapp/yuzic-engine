@@ -9,6 +9,26 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.2.5]
+
+### Fixed
+
+- iOS: a route change paused whatever had replaced the output, because the
+  rule read the reason code and nothing else. Its own documentation has always
+  excluded "a dock, CarPlay connecting or AirPods taking over", and only the
+  ports can tell those from a private listen escaping into a room — so both are
+  now read, and a handover from one personal output to another plays on. A
+  route change the system does not characterise still pauses, as before.
+  Suspected in yuzic#298, where an AirPod stem pauses and will not unpause:
+  the link parks while paused, the press starts playback, iOS re-establishes
+  the route, and the handover paused the engine milliseconds after the press.
+  Not confirmed on hardware. New on iOS in 1.2.3, which applied
+  `pauseOnBecomingNoisy` on this platform for the first time.
+- iOS: a remote play that throws is logged instead of swallowed. A press from
+  an earpiece or a lock screen has no screen to report on, and `try?` left
+  nothing in the device log either — so nothing could tell a press that never
+  arrived from one that arrived and was refused.
+
 ## [1.2.4]
 
 ### Fixed
@@ -628,7 +648,8 @@ point; 1.0.0 marks the API being committed to rather than the code being new.
   live one mid-track. `Tools/parity.py` declares it; every other method agrees
   across the two platforms by signature and event vocabulary.
 
-[Unreleased]: https://github.com/yuzicapp/yuzic-engine/compare/v1.2.4...HEAD
+[Unreleased]: https://github.com/yuzicapp/yuzic-engine/compare/v1.2.5...HEAD
+[1.2.5]: https://github.com/yuzicapp/yuzic-engine/compare/v1.2.4...v1.2.5
 [1.2.4]: https://github.com/yuzicapp/yuzic-engine/compare/v1.2.1...v1.2.4
 [1.1.0]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.17...v1.1.0
 [1.0.17]: https://github.com/yuzicapp/yuzic-engine/compare/v1.0.16...v1.0.17
