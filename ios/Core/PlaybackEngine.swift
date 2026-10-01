@@ -455,7 +455,16 @@ public final class PlaybackEngine {
 
   private func wireRemoteCommands() {
     var handlers = RemoteCommandHandlers()
-    handlers.play = { [weak self] in try? self?.play() }
+    // Logged rather than swallowed. A remote play that throws is the one
+    // failure nobody can see — the button is on a lock screen or an earpiece,
+    // there is no screen to put an error on, and `try?` left nothing in the
+    // log either. A device log is then the only way to tell "the press never
+    // arrived" from "the press arrived and playback refused", which is
+    // exactly the question yuzic#298 turns on.
+    handlers.play = { [weak self] in
+      do { try self?.play() }
+      catch { NSLog("[yuzic-engine] remote play failed: \(error)") }
+    }
     handlers.pause = { [weak self] in self?.pause() }
     handlers.next = { [weak self] in try? self?.skipToNext() }
     handlers.previous = { [weak self] in try? self?.skipToPrevious() }
@@ -579,8 +588,14 @@ public final class PlaybackEngine {
       guard let self else { return }
       let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
       let lost = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) == .oldDeviceUnavailable
+      // Both ports, because the reason alone cannot tell a private listen
+      // escaping into a room from one earpiece handing over to another.
+      let previous = (note.userInfo?[AVAudioSessionRouteChangePreviousRouteKey]
+        as? AVAudioSessionRouteDescription)?.outputs.first?.portType.rawValue
+      let current = AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue
       guard Self.shouldPauseForRouteChange(
-        outputWasLost: lost, pauseOnBecomingNoisy: self.pauseOnBecomingNoisy
+        outputWasLost: lost, pauseOnBecomingNoisy: self.pauseOnBecomingNoisy,
+        previousOutput: previous, currentOutput: current
       ) else { return }
       self.pause()
     })
@@ -620,6 +635,23 @@ public final class PlaybackEngine {
   }
 
   /**
+   A port someone is listening through personally, rather than out loud.
+
+   The distinction "becoming noisy" is named after: pausing exists to stop a
+   private listen escaping into a room. Handing from one of these to another
+   is still private and is not a reason to stop.
+   */
+  static func isPersonalListening(_ portRawValue: String) -> Bool {
+    // A raw port string, not an `AVAudioSession.Port`: the whole type is
+    // unavailable on macOS, which is where `swift test` runs this, and naming
+    // it would put the rule out of reach of the only thing checking it. The
+    // caller is on the iOS-only path and has the real port to hand. These
+    // strings are Apple's own public port constants and do not change.
+    ["Headphones", "BluetoothA2DPOutput", "BluetoothHFP", "BluetoothLE", "USBAudio", "CarAudio"]
+      .contains(portRawValue)
+  }
+
+  /**
    Whether a route change should pause.
 
    Pure for the same reason as the rule above, and reachable from a Mac, which
@@ -628,11 +660,38 @@ public final class PlaybackEngine {
    Only the output going away counts — a dock, CarPlay connecting or AirPods
    taking over are route changes a listener wants played through, not paused —
    and the host may turn even that off.
+
+   **That last exclusion was documented here and never implemented.** The rule
+   read the reason code alone, so *any* `.oldDeviceUnavailable` paused,
+   whatever replaced the route. A reason code says a route went away; it does
+   not say the music is now escaping into a room, and only the ports can.
+
+   This is a candidate cause of yuzic#298, where an AirPod stem pauses and
+   will not unpause: the link parks while paused, the press starts playback,
+   iOS re-establishes the AirPods route, and the handover reads as the old
+   device going away — so the engine pauses itself milliseconds after the
+   press. Asymmetric by construction, because a spurious extra pause is
+   invisible when you meant to pause and total when you meant to play. Not
+   confirmed on hardware; the fix is right either way, because the behaviour
+   it removes is one this comment already said should not happen.
+
+   `nil` for either port means the system did not say. Unknown is treated as
+   the old behaviour — pause — so a route change this cannot characterise
+   still stops a private listen escaping.
    */
   static func shouldPauseForRouteChange(
-    outputWasLost: Bool, pauseOnBecomingNoisy: Bool
+    outputWasLost: Bool,
+    pauseOnBecomingNoisy: Bool,
+    previousOutput: String? = nil,
+    currentOutput: String? = nil
   ) -> Bool {
-    outputWasLost && pauseOnBecomingNoisy
+    guard outputWasLost, pauseOnBecomingNoisy else { return false }
+    // What we were playing to is not something a person had in their ears, so
+    // there is nothing private to protect.
+    if let previousOutput, !isPersonalListening(previousOutput) { return false }
+    // Headphones to headphones, or AirPods back to AirPods: still private.
+    if let currentOutput, isPersonalListening(currentOutput) { return false }
+    return true
   }
 
   /**

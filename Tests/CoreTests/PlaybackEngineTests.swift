@@ -801,6 +801,78 @@ final class PlaybackEngineTests: XCTestCase {
       outputWasLost: false, pauseOnBecomingNoisy: false))
   }
 
+  // MARK: - Which lost output is worth pausing for
+
+  // Raw port strings: `AVAudioSession` is unavailable on macOS, where these
+  // run. See `isPersonalListening`.
+  private let bt = "BluetoothA2DPOutput"
+  private let wired = "Headphones"
+  private let car = "CarAudio"
+  private let speaker = "Speaker"
+
+
+  /**
+   The exclusion this rule's own comment has always claimed and never made.
+   Reading the reason code alone, *any* `.oldDeviceUnavailable` paused —
+   including AirPods handing back to AirPods, which is the shape of yuzic#298:
+   the link parks while paused, the stem press starts playback, iOS
+   re-establishes the route, and the handover pauses the engine milliseconds
+   after the press. Invisible when you meant to pause; total when you meant to
+   play.
+   */
+  func testDoesNotPauseWhenOneEarpieceHandsOverToAnother() {
+    XCTAssertFalse(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true,
+      previousOutput: bt, currentOutput: bt))
+  }
+
+  /// The case the whole rule exists for: it is now coming out loud.
+  func testPausesWhenAPrivateListenBecomesTheRoom() {
+    XCTAssertTrue(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true,
+      previousOutput: wired, currentOutput: speaker))
+    XCTAssertTrue(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true,
+      previousOutput: bt, currentOutput: speaker))
+  }
+
+  func testPlaysOnWhenHeadphonesReplaceAnotherPrivateOutput() {
+    // Unplugging a cable straight into a dock's headphone socket, or a car
+    // taking over from AirPods. Still nobody else listening.
+    XCTAssertFalse(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true,
+      previousOutput: bt, currentOutput: car))
+  }
+
+  func testALostSpeakerIsNotSomethingToPauseFor() {
+    // Nothing private was escaping, because it was already out loud.
+    XCTAssertFalse(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true,
+      previousOutput: speaker, currentOutput: speaker))
+  }
+
+  /**
+   Unknown is the old behaviour.
+
+   The system does not always say what the previous route was, and a route
+   change this cannot characterise must still stop a private listen escaping —
+   the failure that matters is music in a room, not a pause too many.
+   */
+  func testAnUncharacterisedRouteChangeStillPauses() {
+    XCTAssertTrue(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true,
+      previousOutput: nil, currentOutput: nil))
+    XCTAssertTrue(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: true,
+      previousOutput: wired, currentOutput: nil))
+  }
+
+  func testTheHostsSwitchStillWinsOverAllOfIt() {
+    XCTAssertFalse(PlaybackEngine.shouldPauseForRouteChange(
+      outputWasLost: true, pauseOnBecomingNoisy: false,
+      previousOutput: wired, currentOutput: speaker))
+  }
+
   func testPlayingOpensTheTrackAtTheStartIndex() throws {
     let (engine, factory, _) = try makeEngine()
     engine.setQueue([song("a"), song("b"), song("c")], startIndex: 1)
