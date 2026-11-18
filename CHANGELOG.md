@@ -9,6 +9,20 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.3.1]
+
+No change to the package. `lib/`, `src/`, `ios/` and `android/` are identical to
+1.3.0; only the version in `package.json` differs. This release exists because
+the way releases happen changed, and an untested release path is not one.
+
+From here the tag workflow publishes to npm itself, using trusted publishing:
+the run trades its GitHub OIDC identity for a credential that lives for minutes
+and can publish nothing but this package. No npm token is stored in a repository
+secret or on anyone's machine, which removes the only credential that could have
+shipped native code to every install if it leaked. npm attests provenance as a
+consequence, so this is the first version that records the commit and the CI run
+that built it. 1.3.0 was the last one published by hand.
+
 ## [1.3.0]
 
 ### Added
