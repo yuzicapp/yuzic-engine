@@ -9,6 +9,23 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.3.2]
+
+### Fixed
+
+- `EngineErrorOperation` is exported from the package. 1.3.0 added it as the
+  closed vocabulary a host groups failures by, and `index.ts` — whose export
+  list is written by hand — was never given it. Nothing in this repository
+  noticed: the type is exported from its own module, so `tsc` passes, the
+  build emits it into `types.d.ts`, and `npm publish` ships it. It fails only
+  in a consumer, and quietly, because an import of a name the entry point does
+  not export resolves to `any` rather than erroring. The app found it by
+  reading `operation?: any` in a compiler message.
+
+  A test now checks that list against `types.ts` in both directions, so the
+  next type added to one and forgotten in the other fails here instead of in
+  someone's editor.
+
 ## [1.3.1]
 
 No change to the package. `lib/`, `src/`, `ios/` and `android/` are identical to
