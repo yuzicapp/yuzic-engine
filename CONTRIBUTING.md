@@ -89,7 +89,8 @@ python3 Tools/parity.py
 ```
 
 `.github/workflows/checks.yml` runs those four on every push and pull request
-to `main`.
+to `main`, plus two that are impractical to keep in the list above: the native
+ALAC decoder under ASan/UBSan, and an Android build.
 
 **Android is built by its host, not here.** This module has no Gradle wrapper
 and no `settings.gradle`, because an Expo module is compiled by the app that
@@ -100,7 +101,43 @@ consumes it — `expoAutolinking.useExpoModules()` in the app's
 Kotlin unit-test target now (the mutual-TLS import, its rejection cases and its
 clearing); it is reached that way rather than standalone.
 
-That is also why CI has no Android job yet. Running one means checking out the
-app, repointing its `yuzic-engine` dependency at the commit under test, and
-building through it — worth doing, and not free, since it drags the whole app's
+CI does run one, by exactly that route: `Build & Test (Android)` checks out the
+app, repoints its `yuzic-engine` dependency at the commit under test, and
+builds through it. It is the slowest job here, because it drags the whole app's
 dependency tree and the NDK into this repository's CI.
+
+**None of the four commands above compile Kotlin.** A change to `android/` can
+pass every one of them and still not build — that has happened, and it reached
+`main`, because the Android job had last been exercised against a branch that
+forked before the broken commit. If you touch `android/`, build it through the
+app's `./gradlew` before committing, or read the Android job's result before
+calling the change verified.
+
+## Releasing
+
+A release is one push:
+
+```sh
+# package.json already says X.Y.Z, and main is green
+git tag X.Y.Z && git push origin X.Y.Z
+```
+
+`.github/workflows/release-on-tag.yml` does the rest: it checks the tag against
+`package.json`, publishes to npm, and creates the GitHub release. Tags are bare
+`X.Y.Z`; the `v` prefix is accepted only so the 21 tags up to `v1.2.1` still
+re-run.
+
+Nothing publishes from a laptop, and there is no npm token anywhere — not in a
+repo secret, not in anyone's `~/.npmrc`. The workflow authenticates with npm
+**trusted publishing**, which trades the run's GitHub OIDC identity for a
+credential that lives for minutes and can only publish this package. npm
+attests provenance automatically as a result, so each release records the
+commit and the run that built it.
+
+That costs one piece of configuration, held on npmjs.com rather than in this
+repository: the package's trusted publisher names the owner, the repository and
+the workflow **filename**. Renaming or moving `release-on-tag.yml` therefore
+breaks publishing, and the failure arrives at release time, not in CI.
+
+The publish step skips a version the registry already serves, so re-running an
+old tag is safe and does the GitHub-release half only.
