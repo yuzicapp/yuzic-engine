@@ -113,7 +113,7 @@ final class MediaServicesResetTests: XCTestCase {
     settle { engine.activePlaybackIsWiredForTesting }
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
     engine.reconfigureAudioSession = { throw ByteSourceError.fetchFailed("session refused") }
 
     engine.recoverFromMediaServicesResetForTesting()

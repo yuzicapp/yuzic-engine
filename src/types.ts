@@ -266,6 +266,27 @@ export type BrowseIcon =
 
 export type BrowseAction = 'shuffle';
 
+/**
+ * What the engine was doing when it failed.
+ *
+ * Both platforms send the same words for the same situations: `parity.py`
+ * compares the modules, and these are the one vocabulary a host groups
+ * failures by. Adding one is a change both native sides make together.
+ */
+export type EngineErrorOperation =
+  /** Opening the source — the file, or the first bytes of the stream. */
+  | 'open'
+  /** Starting or resuming playback of something already opened. */
+  | 'play'
+  /** A stream that was playing and stopped delivering. */
+  | 'stream'
+  /** Bringing audio back after the system took it away. */
+  | 'restart'
+  /** The source ran out well before its stated length. */
+  | 'endedEarly'
+  /** Anything that escaped without being classified. */
+  | 'unknown';
+
 export type EngineEvent =
   | { type: 'stateChange'; state: PlaybackState }
   /**
@@ -277,7 +298,28 @@ export type EngineEvent =
   | { type: 'trackChange'; index: number; id: MediaId | null; previousListenedSec?: number }
   | { type: 'progress'; progress: Progress }
   | { type: 'queueChange' }
-  | { type: 'error'; code: string; message: string; id?: MediaId }
+  | {
+      type: 'error';
+      code: string;
+      /**
+       * A sentence for a listener. Carries the track's title and the
+       * underlying error's own description, which on iOS can include the URL
+       * that failed — so a host that logs this should treat it as text that
+       * may hold credentials, and prefer the fields below.
+       */
+      message: string;
+      id?: MediaId;
+      /**
+       * What the engine was attempting, from a closed vocabulary, so failures
+       * can be grouped rather than string-matched. Absent on an error raised
+       * outside playback, such as `CROSSFADE_DISABLED`.
+       */
+      operation?: EngineErrorOperation;
+      /** The underlying error's domain — `NSURLErrorDomain`, or Media3's error-code name. */
+      domain?: string;
+      /** The underlying error's own code: `-1008`, or a Media3 `errorCode`. */
+      underlyingCode?: number;
+    }
   /**
    * A remote command the engine could not handle alone — the car asked for
    * something from the browse tree, say. The host answers by driving the

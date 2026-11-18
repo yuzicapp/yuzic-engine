@@ -9,6 +9,28 @@ Semver here is a promise about the **JavaScript API** — the methods on
 implementation detail may change in a patch release when the observable
 behaviour does not.
 
+## [1.3.0]
+
+### Added
+
+- The `error` event carries the failure in parts, beside the sentence it
+  already carried: `operation` (`open`, `play`, `stream`, `restart`,
+  `endedEarly`, `unknown`), the `id` of the track it happened to, and the
+  underlying error's own `domain` and `underlyingCode`. `message` is unchanged,
+  so nothing that reads it needs to move.
+
+  The sentence was built by interpolating the track's title and the underlying
+  error, which made it the only thing a host could log and the one thing it
+  should not: an `NSError` from a failed load carries the URL it failed on, and
+  a Subsonic stream URL carries the user's token. A host can now record what
+  happened without recording the credentials, and group failures by kind
+  instead of matching on prose.
+
+  Both platforms send the same vocabulary. They reach it differently — iOS
+  raises each failure from the call that failed, while Media3 reports every
+  cause through one callback, so Android distinguishes `open` from `stream` by
+  whether the player had reached a position. See §13 of `docs/architecture.md`.
+
 ## [1.2.5]
 
 ### Fixed

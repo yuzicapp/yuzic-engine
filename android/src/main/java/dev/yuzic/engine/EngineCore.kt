@@ -292,12 +292,24 @@ internal class EngineCore {
 
     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
       val report = {
+        // The parts beside the sentence, so a host can group failures rather
+        // than match on prose — the same vocabulary iOS sends, and the reason
+        // `EngineErrorOperation` is a closed union in `types.ts`. Media3
+        // cannot tell "would not open" from "died mid-stream" as cleanly as
+        // AVFoundation does, so the position decides: a player that had
+        // started and has a position lost a stream, one that had not could not
+        // open the source.
+        val operation = if (player.currentPosition > 0) "stream" else "open"
         sendEvent(
           "onError",
-          mapOf(
-            "code" to "PLAYBACK_FAILED",
-            "message" to (error.message ?: error.errorCodeName),
-          ),
+          buildMap {
+            put("code", "PLAYBACK_FAILED")
+            put("message", error.message ?: error.errorCodeName)
+            put("operation", operation)
+            queue.activeTrack?.id?.let { put("id", it) }
+            put("domain", error.errorCodeName)
+            put("underlyingCode", error.errorCode)
+          },
         )
       }
       val key = if (failureMeansBadBytes(error.errorCode)) failingCacheKey() else null
@@ -788,10 +800,12 @@ internal class EngineCore {
       player.pause()
       sendEvent(
         "onError",
-        mapOf(
-          "code" to "PLAYBACK_FAILED",
-          "message" to "$title stopped before it ended",
-        ),
+        buildMap {
+          put("code", "PLAYBACK_FAILED")
+          put("message", "$title stopped before it ended")
+          put("operation", "endedEarly")
+          queue.activeTrack?.id?.let { put("id", it) }
+        },
       )
       return
     }

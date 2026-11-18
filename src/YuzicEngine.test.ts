@@ -23,6 +23,71 @@ jest.mock('react-native', () => ({ Platform: { OS: 'android' } }));
 
 import { YuzicEngine } from './YuzicEngine';
 
+/**
+ * The error event's shape.
+ *
+ * `onError` used to carry a code and a sentence, and the sentence was built by
+ * interpolating the track's title and the underlying error. A host could not
+ * group failures without matching prose — and on iOS the interpolated error
+ * carries the URL that failed, credentials included, so the one field it had
+ * was the one it could not safely log. The parts travel beside the sentence
+ * now; this pins that they survive the bridge.
+ */
+describe('the error event', () => {
+  function emitted(payload: Record<string, unknown>) {
+    const listeners: Record<string, (p: unknown) => void> = {};
+    (nativeStub.addListener as jest.Mock).mockImplementation(
+      (name: string, fn: (p: unknown) => void) => {
+        listeners[name] = fn;
+        return { remove: jest.fn() };
+      }
+    );
+
+    const seen: unknown[] = [];
+    const unsubscribe = YuzicEngine.addListener(event => seen.push(event));
+    listeners.onError?.(payload);
+    unsubscribe();
+    return seen[0];
+  }
+
+  it('carries the operation, the track and the underlying error', () => {
+    expect(
+      emitted({
+        code: 'PLAYBACK_FAILED',
+        message: 'Could not open Arrival: ...',
+        id: 'track-42',
+        operation: 'open',
+        domain: 'NSURLErrorDomain',
+        underlyingCode: -1008,
+      })
+    ).toEqual({
+      type: 'error',
+      code: 'PLAYBACK_FAILED',
+      message: 'Could not open Arrival: ...',
+      id: 'track-42',
+      operation: 'open',
+      domain: 'NSURLErrorDomain',
+      underlyingCode: -1008,
+    });
+  });
+
+  /**
+   * `CROSSFADE_DISABLED` is not a playback failure and neither platform sends
+   * an operation with it, so the fields are absent rather than empty.
+   */
+  it('leaves the new fields undefined when the native side sends none', () => {
+    expect(
+      emitted({ code: 'CROSSFADE_DISABLED', message: 'Crossfade turned off.' })
+    ).toMatchObject({
+      type: 'error',
+      code: 'CROSSFADE_DISABLED',
+      operation: undefined,
+      domain: undefined,
+      underlyingCode: undefined,
+    });
+  });
+});
+
 describe('the facade over a partial native module', () => {
   it('passes through methods the platform does implement', async () => {
     await YuzicEngine.play();

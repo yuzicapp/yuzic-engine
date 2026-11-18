@@ -506,8 +506,21 @@ public final class YuzicEngineModule: Module {
       // ran out" and "the state is now ended" are different statements
       // internally; on the wire there is only the one state.
       break
-    case .failed(let message):
-      sendEvent("onError", ["code": "PLAYBACK_FAILED", "message": message])
+    case .failed(let failure):
+      // The sentence stays, for hosts that show it. The parts beside it are
+      // what a host's diagnostics can actually group by — see
+      // `PlaybackEngine.Failure`. Optionals are left out rather than sent as
+      // null: the bridge turns a missing key into `undefined`, which is what
+      // the TypeScript side declares.
+      var payload: [String: Any] = [
+        "code": "PLAYBACK_FAILED",
+        "message": failure.message,
+        "operation": failure.operation.rawValue,
+      ]
+      if let id = failure.id { payload["id"] = id }
+      if let domain = failure.domain { payload["domain"] = domain }
+      if let underlyingCode = failure.underlyingCode { payload["underlyingCode"] = underlyingCode }
+      sendEvent("onError", payload)
     }
   }
 

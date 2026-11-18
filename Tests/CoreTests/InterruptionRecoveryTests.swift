@@ -62,7 +62,7 @@ final class InterruptionRecoveryTests: XCTestCase {
     engine.onEvent = { [unowned self] event in
       switch event {
       case .trackChanged: self.trackChanges += 1
-      case .failed(let message): self.failures.append(message)
+      case .failed(let failure): self.failures.append(failure.message)
       case .stateChanged(let state): self.states.append(state)
       default: break
       }

@@ -139,7 +139,7 @@ final class TruncatedStreamTests: XCTestCase {
     try play(engine, upTo: 8, first: song("a"))
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
 
     engine.finishActiveTrackForTesting()
     settle { factory.offsetsAsked.count >= 2 }
@@ -239,7 +239,7 @@ final class TruncatedStreamTests: XCTestCase {
     try play(engine, upTo: 8, first: song("a"))
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
 
     engine.finishActiveTrackForTesting()
     settle { !failures.isEmpty }
@@ -293,7 +293,7 @@ final class TruncatedStreamTests: XCTestCase {
     try play(engine, upTo: 8, first: song("a"))
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
 
     // Spend the budget, then one more. Each reconnection reopens at the same
     // eight seconds and the reader ends there again, which is the shape of a

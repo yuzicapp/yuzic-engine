@@ -52,7 +52,67 @@ public final class PlaybackEngine {
     case trackChanged(index: Int, id: MediaId?, previousListenedSec: Double?)
     case progress(positionSec: Double, durationSec: Double, bufferedSec: Double)
     case ended
-    case failed(String)
+    case failed(Failure)
+  }
+
+  /**
+   A failure, in parts.
+
+   This was `case failed(String)`, and the string was built by interpolating
+   the track's title and the underlying error into a sentence. Prose is what a
+   person reads and the worst thing to hand a program: a host could not count
+   failures by kind, could not tell "the file would not open" from "the
+   connection died mid-song", and — since an `NSError` from a failed load
+   carries the failing URL in its `userInfo` — could not log the message at all
+   without logging the user's credentials with it.
+
+   So the parts travel separately and the sentence travels too. `message` is
+   unchanged and still the thing to show a listener; everything beside it is
+   for the host's diagnostics.
+   */
+  public struct Failure {
+    /**
+     What the engine was attempting. A closed vocabulary rather than free text,
+     because the whole point is that a host can group by it: "this track will
+     not open" and "the stream died at 57 seconds" are different problems with
+     different fixes, and they were previously the same string shape.
+     */
+    public enum Operation: String {
+      /// Opening the source — the file, or the first bytes of the stream.
+      case open
+      /// Starting or resuming playback of something already opened.
+      case play
+      /// A stream that was playing and stopped delivering.
+      case stream
+      /// Bringing audio back after the system took it away.
+      case restart
+      /// The source ran out well before its stated length.
+      case endedEarly
+      /// Anything that escaped without being classified.
+      case unknown
+    }
+
+    public let operation: Operation
+    /// The track it happened to, where the engine knows which one.
+    public let id: MediaId?
+    /// The sentence hosts have been showing since 1.0, unchanged.
+    public let message: String
+    /// `NSError.domain` of the underlying failure, e.g. `NSURLErrorDomain`.
+    public let domain: String?
+    /// `NSError.code`, e.g. `-1008` for a resource that would not load.
+    public let underlyingCode: Int?
+
+    public init(_ operation: Operation, id: MediaId?, message: String, error: Error? = nil) {
+      self.operation = operation
+      self.id = id
+      self.message = message
+      // Every Swift `Error` bridges to `NSError`: a Foundation error keeps its
+      // real domain and code, and one of ours reports its type name and case
+      // index, which still tells two failures apart.
+      let bridged = error.map { $0 as NSError }
+      self.domain = bridged?.domain
+      self.underlyingCode = bridged?.code
+    }
   }
 
   public enum PlaybackState: String {
@@ -897,7 +957,7 @@ public final class PlaybackEngine {
       if activeReader != nil { pendingRestart = (frame, origin) }
       state = .paused
       publishNowPlaying()
-      emit(.failed("audio could not be restarted after a media services reset: \(error)"))
+      emit(.failed(.init(.restart, id: queue.activeTrack?.id, message: "audio could not be restarted after a media services reset: \(error)", error: error)))
       return
     }
     pendingRestart = nil
@@ -927,7 +987,7 @@ public final class PlaybackEngine {
       activePlayback = nil
       state = .paused
       publishNowPlaying()
-      emit(.failed("audio could not be restarted after a media services reset: \(error)"))
+      emit(.failed(.init(.restart, id: queue.activeTrack?.id, message: "audio could not be restarted after a media services reset: \(error)", error: error)))
     }
   }
 
@@ -1305,7 +1365,7 @@ public final class PlaybackEngine {
         let title = self.queue.activeTrack?.title ?? "this track"
         self.state = .paused
         self.publishNowPlaying()
-        self.emit(.failed("Lost the stream for \(title): \(error)"))
+        self.emit(.failed(.init(.stream, id: self.queue.activeTrack?.id, message: "Lost the stream for \(title): \(error)", error: error)))
       }
     }
   }
@@ -1373,7 +1433,7 @@ public final class PlaybackEngine {
           guard let self, self.openToken == token else { return }
           self.state = .paused
           self.publishNowPlaying()
-          self.emit(.failed("Lost the stream for \(track.title): \(error)"))
+          self.emit(.failed(.init(.stream, id: track.id, message: "Lost the stream for \(track.title): \(error)", error: error)))
         }
         return
       }
@@ -1409,7 +1469,7 @@ public final class PlaybackEngine {
           self.activePlayback = nil
           self.state = .paused
           self.publishNowPlaying()
-          self.emit(.failed("Lost the stream for \(track.title): \(error)"))
+          self.emit(.failed(.init(.stream, id: track.id, message: "Lost the stream for \(track.title): \(error)", error: error)))
           return
         }
         self.publishNowPlaying()
@@ -1565,7 +1625,7 @@ public final class PlaybackEngine {
         try beginTrack(at: index, fromFrame: 0, prepared: prepared.reader, announced: true)
       } catch {
         state = .paused
-        emit(.failed("Could not play \(track.title): \(error)"))
+        emit(.failed(.init(.play, id: track.id, message: "Could not play \(track.title): \(error)", error: error)))
       }
       return
     }
@@ -1582,7 +1642,7 @@ public final class PlaybackEngine {
         // is a spinner that never resolves.
         self.state = .paused
         self.publishNowPlaying()
-        self.emit(.failed("Could not open \(track.title): \(error)"))
+        self.emit(.failed(.init(.open, id: track.id, message: "Could not open \(track.title): \(error)", error: error)))
       case .success(let reader):
         do {
           try self.beginTrack(at: index, fromFrame: 0, prepared: reader, announced: true)
@@ -1592,7 +1652,7 @@ public final class PlaybackEngine {
           // beside the error toast.
           self.state = .paused
           self.publishNowPlaying()
-          self.emit(.failed("Could not play \(track.title): \(error)"))
+          self.emit(.failed(.init(.play, id: track.id, message: "Could not play \(track.title): \(error)", error: error)))
         }
       }
     }
@@ -1656,7 +1716,7 @@ public final class PlaybackEngine {
         // resolves — the automatic advance once swallowed exactly this.
         self.state = .paused
         self.publishNowPlaying()
-        self.emit(.failed("Could not open \(track.title): \(error)"))
+        self.emit(.failed(.init(.open, id: track.id, message: "Could not open \(track.title): \(error)", error: error)))
       case .success(let reader):
         self.begin(track, at: index, fromFrame: frame,
                    previousListenedSec: previousListenedSec, reader: reader)
@@ -1677,7 +1737,7 @@ public final class PlaybackEngine {
     } catch {
       state = .paused
       publishNowPlaying()
-      emit(.failed("Could not play \(track.title): \(error)"))
+      emit(.failed(.init(.play, id: track.id, message: "Could not play \(track.title): \(error)", error: error)))
     }
   }
 
@@ -1793,7 +1853,7 @@ public final class PlaybackEngine {
         let title = self.queue.activeTrack?.title ?? "this track"
         self.state = .paused
         self.publishNowPlaying()
-        self.emit(.failed("\(title) stopped before it ended"))
+        self.emit(.failed(.init(.endedEarly, id: self.queue.activeTrack?.id, message: "\(title) stopped before it ended")))
         return
       }
       let listened = self.listenedSeconds()
@@ -2137,7 +2197,7 @@ public final class PlaybackEngine {
         // `handleTrackFinished` takes it from there.
         self.transitioning = false
         if case .failure(let error) = result {
-          self.emit(.failed("Could not open \(next.title): \(error)"))
+          self.emit(.failed(.init(.open, id: next.id, message: "Could not open \(next.title): \(error)", error: error)))
         }
         return
       }
@@ -2235,7 +2295,7 @@ public final class PlaybackEngine {
       }
     } catch {
       transitioning = false
-      emit(.failed(String(describing: error)))
+      emit(.failed(.init(.unknown, id: queue.activeTrack?.id, message: String(describing: error), error: error)))
     }
   }
 

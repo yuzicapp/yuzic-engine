@@ -1106,6 +1106,18 @@ existing players presenting the old identity. Clearing swaps to a normal client
 for both paths and evicts the removed client's pooled connections without
 weakening the platform trust manager or hostname verification.
 
+**An error's `operation` is known on iOS and inferred on Android.** Both
+platforms send the same closed vocabulary (`open`, `play`, `stream`,
+`restart`, `endedEarly`, `unknown`), but they do not arrive at it the same way.
+iOS raises each failure from the call that failed, so it says what it was
+doing. Media3 reports through one `onPlayerError` for every cause, so Android
+decides between `open` and `stream` by whether the player had reached a
+position — right in the ordinary cases and wrong for a stream that dies in its
+first second, which Android will call `open`. `domain` differs in kind for the
+same reason: iOS sends an `NSError` domain, Android sends Media3's
+`errorCodeName`, and `underlyingCode` is each platform's own number. They are
+for grouping failures within a platform, not for comparing across one.
+
 The Android implementation is compiled and its native unit tests run through a
 real Android SDK/NDK host. Behaviour that needs a handset remains called out
 below rather than being inferred from compilation.

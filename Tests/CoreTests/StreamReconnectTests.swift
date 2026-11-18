@@ -116,7 +116,7 @@ final class StreamReconnectTests: XCTestCase {
     try playAndSeek(engine, toSeconds: 8)
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
 
     engine.failActiveTrackForTesting(ByteSourceError.fetchFailed("stream went away"))
     settle { factory.offsetsAsked.count >= 2 }
@@ -165,13 +165,43 @@ final class StreamReconnectTests: XCTestCase {
     try playAndSeek(engine, toSeconds: 8)
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
 
     engine.failActiveTrackForTesting(ByteSourceError.fetchFailed("stream went away"))
     settle { !failures.isEmpty }
 
     XCTAssertEqual(factory.offsetsAsked.count, 1, "nothing should have been reopened")
     XCTAssertEqual(failures.count, 1, "a ranged failure is still reported as a failure")
+  }
+
+  /**
+   A failure says what it was doing, to what, and why.
+
+   It used to say only `"Lost the stream for a: fetchFailed(...)"`, and a host
+   that wanted to count stream deaths separately from files that will not open
+   had to match on prose. Worse, the sentence interpolates the underlying
+   error, and on a real device that error carries the URL it failed on —
+   credentials and all — so the one field a host could log was the one field it
+   could not log safely.
+
+   The parts are what a host groups by now. The sentence is still there, and
+   still carries the title, for showing a listener.
+   */
+  func testAFailureCarriesItsOperationTrackAndUnderlyingError() throws {
+    let (engine, _) = try makeEngine(sequential: false)
+    try playAndSeek(engine, toSeconds: 8)
+
+    var failures: [PlaybackEngine.Failure] = []
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure) } }
+
+    engine.failActiveTrackForTesting(ByteSourceError.fetchFailed("stream went away"))
+    settle { !failures.isEmpty }
+
+    let failure = try XCTUnwrap(failures.first)
+    XCTAssertEqual(failure.operation, .stream, "a stream that stopped delivering, not a file that would not open")
+    XCTAssertEqual(failure.id, "a", "named the track it happened to")
+    XCTAssertNotNil(failure.domain, "an underlying error reports a domain, so two failures can be told apart")
+    XCTAssertTrue(failure.message.contains("Lost the stream"), "the sentence a listener reads is unchanged")
   }
 
   /**
@@ -186,7 +216,7 @@ final class StreamReconnectTests: XCTestCase {
     try playAndSeek(engine, toSeconds: 8)
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
     var lastOpens = factory.offsetsAsked.count
 
     // Injected until the budget is spent rather than a fixed number of times,
@@ -231,7 +261,7 @@ final class StreamReconnectTests: XCTestCase {
     factory.refuseFromAttempt = 2
 
     var failures: [String] = []
-    engine.onEvent = { if case .failed(let message) = $0 { failures.append(message) } }
+    engine.onEvent = { if case .failed(let failure) = $0 { failures.append(failure.message) } }
 
     engine.failActiveTrackForTesting(ByteSourceError.fetchFailed("stream went away"))
     settle { !failures.isEmpty }

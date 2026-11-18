@@ -65,7 +65,15 @@ function toEvent(name: (typeof EVENTS)[number], payload: any): EngineEvent | nul
     case 'onQueueChange':
       return { type: 'queueChange' };
     case 'onError':
-      return { type: 'error', code: payload.code, message: payload.message, id: payload.id };
+      return {
+        type: 'error',
+        code: payload.code,
+        message: payload.message,
+        id: payload.id,
+        operation: payload.operation,
+        domain: payload.domain,
+        underlyingCode: payload.underlyingCode,
+      };
     case 'onRemoteCommand':
       return { type: 'remoteCommand', command: payload.command, payload: payload.payload };
     default:
