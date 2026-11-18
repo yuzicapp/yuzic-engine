@@ -10,6 +10,21 @@ Licensed under the Apache License, Version 2.0. See LICENSE.
 Third-party notices
 --------------------------------------------------------------------------------
 
+Android ALAC playback links FFmpeg 9.0.2's libavcodec and libavutil into
+libyuzic_alac.so. Copyright (c) 2000-2026 the FFmpeg developers, licensed under
+LGPL-2.1-or-later. Only the ALAC decoder is enabled; GPL, nonfree and version3
+components are disabled. The FFmpeg source is unmodified.
+
+Corresponding source: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+SHA-256: 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+Build configuration and JNI wrapper: android/src/main/cpp.
+Rebuild/replacement instructions: android/README.md. Replacement of the native
+library and reverse engineering to debug modifications to it are permitted.
+License texts and this source pointer are also packaged in the Android app's
+assets/yuzic-alac directory.
+
+--------------------------------------------------------------------------
+
 This project deliberately contains no code from @rntp/player v5 or later, which
 is proprietary and whose licence forbids using it to build a competing product.
 

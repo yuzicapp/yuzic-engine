@@ -1,0 +1,18 @@
+Yuzic ALAC decoder
+
+This app bundles FFmpeg 9.0.2 (libavcodec and libavutil, ALAC decoder enabled),
+Copyright (c) 2000-2026 the FFmpeg developers, under LGPL version 2.1 or later.
+See COPYING.LGPLv2.1 and FFmpeg-LICENSE.md in this directory.
+
+Unmodified corresponding FFmpeg source:
+https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+SHA-256: 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+
+The build configuration and JNI wrapper are distributed in yuzic-engine under
+android/src/main/cpp, with rebuilding instructions in android/README.md:
+https://github.com/yuzicapp/yuzic-engine
+
+FFmpeg is built without GPL, nonfree, or version3 components. No FFmpeg network
+transport, demuxer, encoder, or command-line program is enabled. It is linked
+into libyuzic_alac.so. You may rebuild and replace that library in this app;
+reverse engineering for debugging modifications to it is permitted.

@@ -31,6 +31,17 @@ behaviour does not.
   cause through one callback, so Android distinguishes `open` from `stream` by
   whether the player had reached a position. See §13 of `docs/architecture.md`.
 
+### Fixed
+
+- Android: ALAC in MP4/M4A now uses the native FFmpeg 9.0.2 decoder ahead of
+  platform decoders, including devices that advertise ALAC support but fail
+  in `MediaCodecAudioRenderer`, and files Gonic labels
+  `audio/mp4a-latm`. The decoder shares each voice's cache and PCM16 DSP path.
+
+- Android: the native decoder is built for all four ABIs with 16 KiB ELF
+  alignment, and declines the format when its library is absent, so a build
+  without it falls back to the platform decoder rather than failing to play.
+
 ## [1.2.5]
 
 ### Fixed

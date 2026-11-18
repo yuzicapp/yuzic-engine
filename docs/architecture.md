@@ -403,6 +403,27 @@ that depth rather than a fixed one — the track in question is 24-bit, where
 FLAC-in-Ogg is still not claimed: `oggCodec` answers nil for it and the raw
 signature check does not match, so it reaches Core Audio exactly as before.
 
+### Android ALAC requires a decoder as well as an extractor
+
+Media3 extracts ALAC from MP4, but Android does not require an ALAC MediaCodec
+decoder. Other devices advertise ALAC support but fail at playback, so
+`AlacAudioRenderer` is preferred before the platform renderer, using
+FFmpeg 9.0.2's native decoder and the same per-voice `AudioSink` as every other
+format. This keeps authentication, range caching, equalizer, replay gain and
+crossfade in the existing path. FFmpeg is built from pinned, checksummed source
+with only ALAC enabled, without network transports or demuxers. Each decoder
+owns its native context, flushes on seeks, and releases it after its worker
+thread has stopped. Input is padded to libavcodec's requirements and errors
+propagate through Media3. All supported source depths feed PCM16 to the existing
+processors; this does not add high-resolution output to the graph.
+
+Gonic's `audio/mp4a-latm` response for the reported M4A was byte-identical to the
+ALAC original. The MIME label did not describe its container. Media3's default
+extractors sniff MP4 bytes and supply `audio/alac` plus the 24-byte config;
+the renderer is selected from that extracted format, not the server's label.
+Actual AAC/LATM still uses the platform renderer. See `android/README.md` for
+native build, verification, and LGPL source/replacement details.
+
 ## 10. Transcoded streams are a second transport, not a variation
 
 Measured, not assumed — see `spikes/ios-reader`. Against a real Navidrome, a

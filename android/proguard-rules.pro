@@ -7,6 +7,11 @@
 # expo-module.config.json, which R8 cannot see.
 -keep class dev.yuzic.engine.YuzicEngineModule { *; }
 
+# JNI entry points use this class and method names in every release build.
+-keep,includedescriptorclasses class dev.yuzic.engine.NativeAlacDecoder {
+    native <methods>;
+}
+
 # Records are constructed reflectively from the JS payload, field by field.
 -keepclassmembers class dev.yuzic.engine.** {
   @expo.modules.kotlin.records.Field <fields>;

@@ -10,7 +10,7 @@ concurrency:
   group: checks-${{ github.ref }}
   cancel-in-progress: true
 
-# Four jobs. The Android one is shaped oddly on purpose: this module has no
+# Five jobs. The Android one is shaped oddly on purpose: this module has no
 # Gradle wrapper and no settings.gradle, because an Expo module is compiled by
 # the app that consumes it — `expoAutolinking.useExpoModules()` in the app's
 # android/settings.gradle is what pulls this directory into a build at all. So
@@ -45,6 +45,28 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 Tools/parity.py
+
+  # Exercise the actual native decoder, including corrupted packets, rather
+  # than relying on a successful Android link to imply correct PCM output.
+  alac:
+    name: ALAC native (ASan/UBSan)
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1
+      UBSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure native ALAC tests
+        run: |
+          cmake -S android/src/main/cpp -B /tmp/yuzic-alac \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+      - name: Build and test
+        run: |
+          cmake --build /tmp/yuzic-alac --parallel 2
+          ctest --test-dir /tmp/yuzic-alac --output-on-failure
 
   # `swift test` over ios/Core through Package.swift — the model, queue rules,
   # graph, readers and the vendored Xiph decoders. Not the Expo module, which

@@ -74,15 +74,19 @@ progress, queue changes, and errors.
 
 ## Formats
 
-Core Audio and Media3 between them cover MP3, AAC/M4A, ALAC, FLAC and WAV. Two
-that they do not, and this engine decodes itself:
+Core Audio and Media3 between them cover MP3, AAC/M4A, FLAC and WAV. The engine
+also supplies decoders for these platform gaps:
 
 | | iOS | Android |
 | --- | --- | --- |
 | Ogg Vorbis | libvorbis, vendored | Media3 |
 | Ogg Opus | libopus, vendored | Media3 |
+| ALAC in MP4/M4A | Core Audio | FFmpeg 9.0.2, preferred native decoder |
 
-iOS has no decoder for either — an `.ogg` or `.opus` cannot be opened by Core
+Android ALAC uses the existing cache and DSP path. Its output is PCM16,
+including for 20/24/32-bit sources. See [Android decoding and build notes](android/README.md).
+
+iOS has no built-in decoder for either Ogg format — an `.ogg` or `.opus` cannot be opened by Core
 Audio at all, so the failure is total rather than a quality loss. For a
 self-hosted library stored in one of them that is the difference between working
 and not, so libogg, libvorbis, libopus and libopusfile are vendored under

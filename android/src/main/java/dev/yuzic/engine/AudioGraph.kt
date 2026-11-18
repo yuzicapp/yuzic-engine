@@ -1,6 +1,7 @@
 package dev.yuzic.engine
 
 import android.content.Context
+import android.os.Handler
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
@@ -15,6 +16,9 @@ import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -97,6 +101,24 @@ class AudioGraph(private val context: Context, private val httpCallFactory: Call
     val fade = FadeAudioProcessor()
 
     val renderersFactory = object : DefaultRenderersFactory(context) {
+      override fun buildAudioRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        audioSink: AudioSink,
+        eventHandler: Handler,
+        eventListener: AudioRendererEventListener,
+        out: ArrayList<Renderer>,
+      ) {
+        // Some devices advertise ALAC support and then fail in MediaCodec.
+        // Prefer our decoder for ALAC; it declines every other audio format.
+        // Both renderers share this voice's sink, including its EQ and fade.
+        out.add(AlacAudioRenderer(eventHandler, eventListener, audioSink))
+        super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector,
+          enableDecoderFallback, audioSink, eventHandler, eventListener, out)
+      }
+
       override fun buildAudioSink(
         context: Context,
         enableFloatOutput: Boolean,

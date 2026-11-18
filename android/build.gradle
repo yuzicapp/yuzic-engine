@@ -22,6 +22,22 @@ android {
     versionCode 1
     versionName '0.0.0'
     consumerProguardFiles('proguard-rules.pro')
+    externalNativeBuild {
+      cmake {
+        arguments '-DANDROID_STL=c++_static'
+        // Optional local/offline source tree; normal builds fetch the pinned,
+        // checksummed FFmpeg 9.0.2 source release in CMakeLists.txt.
+        if (project.hasProperty('yuzicEngineFfmpegSource')) {
+          arguments "-DYUZIC_FFMPEG_SOURCE=${project.property('yuzicEngineFfmpegSource')}"
+        }
+      }
+    }
+  }
+  externalNativeBuild {
+    cmake {
+      path 'src/main/cpp/CMakeLists.txt'
+      version '3.22.1'
+    }
   }
 }
 
