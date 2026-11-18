@@ -43,12 +43,34 @@ if(ANDROID)
     "--arch=${FFMPEG_ARCH}" "--ar=${CMAKE_AR}" "--ranlib=${CMAKE_RANLIB}" "--strip=${CMAKE_STRIP}")
 endif()
 
+# A host build on macOS compiles nothing without an SDK path: FFmpeg's
+# configure runs the compiler itself, and a bare `cc` fails its first checks
+# with `ld: library 'System' not found`, then `'ctype.h' file not found`.
+# Android is unaffected — it is handed the NDK's sysroot above — so this is
+# scoped to a host build on Apple.
+#
+# Through `SDKROOT` rather than `--extra-cflags=-isysroot`, and that is not a
+# style choice. FFmpeg's configure keeps the *last* `--extra-cflags` it is
+# given rather than accumulating them, so a second one here silently replaces
+# the sanitiser flags below; and its host-compiler probes read `--host-cflags`,
+# a different switch again, so even winning that fight would leave
+# `test_host_cc` failing. Apple's clang reads `SDKROOT` on every invocation,
+# which is all of them at once.
+set(FFMPEG_ENV "")
+if(APPLE AND NOT ANDROID)
+  execute_process(COMMAND xcrun --show-sdk-path
+    OUTPUT_VARIABLE YUZIC_MACOS_SDK OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(YUZIC_MACOS_SDK)
+    set(FFMPEG_ENV "${CMAKE_COMMAND}" -E env "SDKROOT=${YUZIC_MACOS_SDK}")
+  endif()
+endif()
+
 ExternalProject_Add(yuzic_ffmpeg
   SOURCE_DIR "${YUZIC_FFMPEG_SOURCE}"
   BINARY_DIR "${FFMPEG_BUILD}"
   DOWNLOAD_COMMAND ""
   UPDATE_COMMAND ""
-  CONFIGURE_COMMAND "${YUZIC_FFMPEG_SOURCE}/configure"
+  CONFIGURE_COMMAND ${FFMPEG_ENV} "${YUZIC_FFMPEG_SOURCE}/configure"
     "--cc=${FFMPEG_CC}" ${FFMPEG_PLATFORM_ARGS}
     "--extra-cflags=${CMAKE_C_FLAGS} -O3 -fPIC -fvisibility=hidden"
     "--extra-ldflags=${CMAKE_EXE_LINKER_FLAGS}"
@@ -57,15 +79,30 @@ ExternalProject_Add(yuzic_ffmpeg
     --disable-swscale --disable-swresample --disable-shared --enable-static
     --disable-gpl --disable-nonfree --disable-version3 --disable-x86asm
     --disable-debug --enable-pic --enable-decoder=alac
-  BUILD_COMMAND "${FFMPEG_MAKE}" "-j${YUZIC_FFMPEG_JOBS}" libavcodec/libavcodec.a libavutil/libavutil.a
+  BUILD_COMMAND ${FFMPEG_ENV} "${FFMPEG_MAKE}" "-j${YUZIC_FFMPEG_JOBS}" libavcodec/libavcodec.a libavutil/libavutil.a
   INSTALL_COMMAND ""
   BUILD_BYPRODUCTS "${FFMPEG_BUILD}/libavcodec/libavcodec.a" "${FFMPEG_BUILD}/libavutil/libavutil.a"
   LOG_CONFIGURE ON LOG_BUILD ON LOG_OUTPUT_ON_FAILURE ON)
 
 add_library(yuzic_alac_core STATIC AlacDecoder.cpp)
 add_dependencies(yuzic_alac_core yuzic_ffmpeg)
+# FFmpeg's headers are reached through a directory holding nothing but
+# `libavcodec/` and `libavutil/`, never through its source root.
+#
+# The root carries a file called `VERSION`, whose contents are `9.0.2`. On a
+# case-insensitive filesystem — every default macOS install — libc++'s
+# `#include <version>` from `<cstddef>` finds that file instead of the header,
+# and the compiler reports `error: expected unqualified-id` on a line reading
+# `9.0.2`. It takes down the Android build and the host test build alike, and
+# a Linux CI cannot reproduce it, because there `VERSION` and `version` are
+# two different names.
+set(FFMPEG_INCLUDE "${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-include")
+file(MAKE_DIRECTORY "${FFMPEG_INCLUDE}")
+file(CREATE_LINK "${YUZIC_FFMPEG_SOURCE}/libavcodec" "${FFMPEG_INCLUDE}/libavcodec" SYMBOLIC)
+file(CREATE_LINK "${YUZIC_FFMPEG_SOURCE}/libavutil"  "${FFMPEG_INCLUDE}/libavutil"  SYMBOLIC)
+
 target_include_directories(yuzic_alac_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
-  "${YUZIC_FFMPEG_SOURCE}" "${FFMPEG_BUILD}")
+  "${FFMPEG_INCLUDE}" "${FFMPEG_BUILD}")
 target_compile_features(yuzic_alac_core PUBLIC cxx_std_17)
 set_target_properties(yuzic_alac_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(yuzic_alac_core PUBLIC
