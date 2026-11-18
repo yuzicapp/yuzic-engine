@@ -110,15 +110,52 @@ jobs:
           # and the package are both public.
           npm publish
 
+      # The release page carries the CHANGELOG entry for the version, not a
+      # generated list of commits. `--generate-notes` produced a body that was
+      # one line — "**Full Changelog**: compare/1.3.1...1.3.2" — while the
+      # entry someone had written by hand sat in CHANGELOG.md and reached
+      # nobody who was not reading the repository.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists."
             exit 0
           fi
+
+          # Everything under `## [X.Y.Z]` up to the next `## [`, with blank
+          # lines trimmed off both ends.
+          awk -v ver="$VERSION" '
+            $0 == "## [" ver "]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          # Strip blank lines from both ends.
+          sed -e '/./,$!d' /tmp/notes.md | tac | sed -e '/./,$!d' | tac > /tmp/notes.body.md
+
+          if [ ! -s /tmp/notes.body.md ]; then
+            # Loud rather than silent: a release with no entry is a changelog
+            # that was not written, and the generated list is the fallback
+            # rather than the plan.
+            echo "::warning::CHANGELOG.md has no '## [$VERSION]' section; falling back to generated notes."
+            gh release create "$TAG" \
+              --title "yuzic-engine $VERSION" \
+              --generate-notes
+            exit 0
+          fi
+
+          # The compare link `--generate-notes` would have added, kept. The
+          # previous release is whatever is newest right now, since this one
+          # does not exist yet.
+          PREV="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')"
+          if [ -n "$PREV" ]; then
+            printf '\n**Full Changelog**: %s/compare/%s...%s\n' \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$PREV" "$TAG" >> /tmp/notes.body.md
+          fi
+
           gh release create "$TAG" \
-            --title "yuzic-engine ${TAG#v}" \
-            --generate-notes
+            --title "yuzic-engine $VERSION" \
+            --notes-file /tmp/notes.body.md
