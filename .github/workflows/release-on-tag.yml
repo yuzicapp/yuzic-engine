@@ -3,11 +3,14 @@ name: Release tagged engine
 on:
   push:
     tags:
+      # `X.Y.Z` is the format; `v*` stays so the 21 tags up to v1.2.1 and any
+      # re-run of them still work. See CONTRIBUTING / AGENTS on the app side.
+      - "[0-9]*"
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing vX.Y.Z tag to publish as a GitHub Release"
+        description: "Existing X.Y.Z tag to publish as a GitHub Release (a leading v is accepted for the older ones)"
         required: true
         type: string
 
@@ -23,8 +26,8 @@ jobs:
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Expected a vX.Y.Z tag, got: $TAG" >&2
+          if [[ ! "$TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected an X.Y.Z tag, got: $TAG" >&2
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
