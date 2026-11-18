@@ -299,7 +299,12 @@ internal class EngineCore {
         // AVFoundation does, so the position decides: a player that had
         // started and has a position lost a stream, one that had not could not
         // open the source.
-        val operation = if (player.currentPosition > 0) "stream" else "open"
+        // Reached through `PlaybackService.graph`, the way `listenedSeconds`
+        // does: this one listener is added to both voices and Media3 does not
+        // say which raised the error, so the active voice is the only player
+        // this callback can name — and there is no `player` in scope to ask.
+        val position = PlaybackService.graph?.activeVoice?.player?.currentPosition ?: 0L
+        val operation = if (position > 0L) "stream" else "open"
         sendEvent(
           "onError",
           buildMap {
