@@ -81,6 +81,18 @@ jobs:
       # those the registry already has the version and there is nothing to do.
       # A publish that should have happened and did not still fails loudly,
       # because `npm publish` rejects a version that is already there.
+      # Trusted publishing fails in two confusing ways when the run cannot mint
+      # an OIDC token: ENEEDAUTH with no registry configured, or a bare 404 on
+      # the PUT with one. Neither names the cause. This does.
+      - name: Confirm the run can mint an OIDC token
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "This job has no OIDC token endpoint, so npm cannot authenticate." >&2
+            echo "'id-token: write' is requested but was not granted to the run." >&2
+            exit 1
+          fi
+          echo "OIDC token endpoint is present."
+
       - name: Publish to npm
         env:
           VERSION: ${{ steps.release.outputs.version }}
