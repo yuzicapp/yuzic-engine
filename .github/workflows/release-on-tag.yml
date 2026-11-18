@@ -57,11 +57,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          # Not optional, despite there being no token to put in it. Without a
-          # configured registry npm has nothing to attach the OIDC credential
-          # to and fails with ENEEDAUTH before it ever attempts the exchange —
-          # which is how 1.3.1 failed on its first attempt, on npm 11.19.1 and
-          # Node 24.22.2, so neither version floor was the cause.
+          # npm's own trusted-publishing example carries this, so it stays.
+          # Whether it is strictly required here is untested: the one run
+          # without it failed, but that run also predated the npmjs.com
+          # publisher being saved, which turned out to be the actual cause of
+          # every failure. Do not read that run as evidence either way.
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
       - run: npm ci
@@ -81,9 +81,12 @@ jobs:
       # those the registry already has the version and there is nothing to do.
       # A publish that should have happened and did not still fails loudly,
       # because `npm publish` rejects a version that is already there.
-      # Trusted publishing fails in two confusing ways when the run cannot mint
-      # an OIDC token: ENEEDAUTH with no registry configured, or a bare 404 on
-      # the PUT with one. Neither names the cause. This does.
+      # When the registry rejects the OIDC exchange, npm falls back to ordinary
+      # token auth and reports that instead: ENEEDAUTH with no registry
+      # configured, a bare 404 on the PUT with one. Neither mentions OIDC, and
+      # four runs went into telling those apart. This separates "the run cannot
+      # mint a token" from "npm would not accept it", which is the fork that
+      # was impossible to see from the errors alone.
       - name: Confirm the run can mint an OIDC token
         run: |
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
