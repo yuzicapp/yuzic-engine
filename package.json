@@ -21,6 +21,7 @@
     "android",
     "lib",
     "src",
+    "!src/**/*.test.ts",
     "LICENSE",
     "NOTICE",
     "CHANGELOG.md",
